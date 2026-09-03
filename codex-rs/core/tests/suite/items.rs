@@ -1004,6 +1004,61 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn third_party_provider_ignores_stream_deltas_without_active_item() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.model_provider.name = "Third-party Responses".to_string();
+        })
+        .build(&server)
+        .await?;
+
+    let stream = sse(vec![
+        ev_response_created("resp-1"),
+        serde_json::json!({
+            "type": "response.reasoning_summary_part.added",
+            "summary_index": 0,
+        }),
+        ev_reasoning_summary_text_delta("partial summary"),
+        ev_reasoning_text_delta("partial raw reasoning"),
+        ev_output_text_delta("partial answer"),
+        ev_reasoning_item(
+            "reasoning-1",
+            &["complete summary"],
+            &["complete raw reasoning"],
+        ),
+        ev_assistant_message("message-1", "complete answer"),
+        ev_completed("resp-1"),
+    ]);
+    mount_sse_once(&server, stream).await;
+
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "reason through it".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+
+    let completed = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::AgentMessage(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
+    let Some(AgentMessageContent::Text { text }) = completed.content.first() else {
+        panic!("expected agent message text content");
+    };
+    assert_eq!(text, "complete answer");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sequential_cutoff_renders_done_summaries_for_active_reasoning_item() -> anyhow::Result<()>
 {
     skip_if_no_network!(Ok(()));

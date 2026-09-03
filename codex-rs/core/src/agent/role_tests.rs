@@ -101,7 +101,7 @@ async fn apply_role_returns_unavailable_for_missing_user_role_file() {
         .await
         .expect_err("missing role file should fail");
 
-    assert_eq!(err, AGENT_TYPE_UNAVAILABLE_ERROR);
+    assert!(err.starts_with(AGENT_TYPE_UNAVAILABLE_ERROR));
 }
 
 #[cfg(unix)]
@@ -124,7 +124,7 @@ async fn apply_role_rejects_symlinked_role_file() {
         .await
         .expect_err("symlinked role file should fail");
 
-    assert_eq!(err, AGENT_TYPE_UNAVAILABLE_ERROR);
+    assert!(err.starts_with(AGENT_TYPE_UNAVAILABLE_ERROR));
 }
 
 #[tokio::test]
@@ -144,7 +144,7 @@ async fn apply_role_returns_unavailable_for_invalid_user_role_toml() {
         .await
         .expect_err("invalid role file should fail");
 
-    assert_eq!(err, AGENT_TYPE_UNAVAILABLE_ERROR);
+    assert!(err.starts_with(AGENT_TYPE_UNAVAILABLE_ERROR));
 }
 
 #[tokio::test]
@@ -287,6 +287,56 @@ async fn apply_role_regenerates_model_instructions_when_personality_changes() {
             expected
         );
     }
+}
+
+#[tokio::test]
+async fn apply_role_overrides_model_provider() {
+    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    let role_path = write_role_config(
+        &home,
+        "custom-provider.toml",
+        "model_provider = \"amazon-bedrock\"\n",
+    )
+    .await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    apply_role_to_config(&mut config, Some("custom"))
+        .await
+        .expect("role should apply");
+
+    assert_eq!(config.model_provider_id, "amazon-bedrock");
+    assert!(!config.model_provider.requires_openai_auth); // amazon-bedrock does not require openai auth
+}
+
+#[tokio::test]
+async fn apply_role_unknown_model_provider_returns_error() {
+    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    let role_path = write_role_config(
+        &home,
+        "unknown-provider.toml",
+        "model_provider = \"does-not-exist\"\n",
+    )
+    .await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    let err = apply_role_to_config(&mut config, Some("custom"))
+        .await
+        .expect_err("unknown provider should fail");
+    assert!(err.starts_with(AGENT_TYPE_UNAVAILABLE_ERROR));
 }
 
 #[tokio::test]
@@ -446,9 +496,14 @@ command = "attacker-command"
         Some("Stay focused")
     );
     assert_eq!(config.model.as_deref(), Some("role-model"));
+    // The role may select any provider already defined in the parent's provider
+    // map, but it cannot redefine providers or endpoints.
+    assert_eq!(config.model_provider_id, "ollama");
+    assert_eq!(
+        config.model_provider,
+        parent.model_providers.get("ollama").cloned().unwrap()
+    );
     assert_eq!(config.permissions, parent.permissions);
-    assert_eq!(config.model_provider_id, parent.model_provider_id);
-    assert_eq!(config.model_provider, parent.model_provider);
     assert_eq!(config.model_providers, parent.model_providers);
     assert_eq!(config.approvals_reviewer, parent.approvals_reviewer);
     assert_eq!(config.mcp_servers, parent.mcp_servers);
@@ -466,7 +521,6 @@ command = "attacker-command"
     for key in [
         "openai_base_url",
         "chatgpt_base_url",
-        "model_provider",
         "approval_policy",
         "sandbox_mode",
         "notify",

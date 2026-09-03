@@ -2700,7 +2700,10 @@ async fn try_run_sampling_request(
                             .await;
                     }
                 } else {
-                    error_or_panic("OutputTextDelta without active item".to_string());
+                    handle_orphaned_stream_delta(
+                        turn_context.provider.info().is_openai(),
+                        "OutputTextDelta",
+                    );
                 }
             }
             ResponseEvent::ToolCallInputDelta {
@@ -2742,7 +2745,10 @@ async fn try_run_sampling_request(
                     sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
                         .await;
                 } else {
-                    error_or_panic("ReasoningSummaryDelta without active item".to_string());
+                    handle_orphaned_stream_delta(
+                        turn_context.provider.info().is_openai(),
+                        "ReasoningSummaryDelta",
+                    );
                 }
             }
             ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
@@ -2760,7 +2766,10 @@ async fn try_run_sampling_request(
                         });
                     sess.send_event(&turn_context, event).await;
                 } else {
-                    error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
+                    handle_orphaned_stream_delta(
+                        turn_context.provider.info().is_openai(),
+                        "ReasoningSummaryPartAdded",
+                    );
                 }
             }
             ResponseEvent::ReasoningSummaryDone {
@@ -2815,7 +2824,10 @@ async fn try_run_sampling_request(
                     sess.send_event(&turn_context, EventMsg::ReasoningRawContentDelta(event))
                         .await;
                 } else {
-                    error_or_panic("ReasoningRawContentDelta without active item".to_string());
+                    handle_orphaned_stream_delta(
+                        turn_context.provider.info().is_openai(),
+                        "ReasoningRawContentDelta",
+                    );
                 }
             }
         }
@@ -2862,6 +2874,14 @@ async fn try_run_sampling_request(
     }
 
     outcome
+}
+
+fn handle_orphaned_stream_delta(is_openai_provider: bool, event_kind: &'static str) {
+    if is_openai_provider {
+        error_or_panic(format!("{event_kind} without active item"));
+    } else {
+        trace!(event_kind, "dropping stream delta without active item");
+    }
 }
 
 pub(crate) fn get_last_assistant_message_from_turn<'a>(
