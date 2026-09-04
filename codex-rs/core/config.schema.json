@@ -774,6 +774,9 @@
             "guardian_reuse_parent_compaction": {
               "type": "boolean"
             },
+            "guardian_thread_context": {
+              "type": "boolean"
+            },
             "guardianv2": {
               "$ref": "#/definitions/FeatureToml_for_GuardianV2ConfigToml"
             },
@@ -1051,6 +1054,9 @@
               "type": "boolean"
             },
             "workspace_owner_usage_nudge": {
+              "type": "boolean"
+            },
+            "worktrees": {
               "type": "boolean"
             },
             "write_stdin_approval": {
@@ -6122,6 +6128,9 @@
         "guardian_reuse_parent_compaction": {
           "type": "boolean"
         },
+        "guardian_thread_context": {
+          "type": "boolean"
+        },
         "guardianv2": {
           "$ref": "#/definitions/FeatureToml_for_GuardianV2ConfigToml"
         },
@@ -6399,6 +6408,9 @@
           "type": "boolean"
         },
         "workspace_owner_usage_nudge": {
+          "type": "boolean"
+        },
+        "worktrees": {
           "type": "boolean"
         },
         "write_stdin_approval": {

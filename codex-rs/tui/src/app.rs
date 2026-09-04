@@ -225,6 +225,7 @@ mod history_ui;
 mod input;
 mod loaded_threads;
 mod misalignment_policy;
+mod model_defaults;
 mod pending_interactive_replay;
 mod permission_shortcuts;
 mod pets;
@@ -242,6 +243,7 @@ mod session_picker;
 mod side;
 mod startup;
 mod startup_prompts;
+mod startup_warnings;
 mod thread_event_buffer;
 mod thread_events;
 mod thread_goal_actions;
@@ -837,7 +839,16 @@ impl App {
             self.handle_draw_pre_render(tui, screen_size)?;
         }
 
-        let event = if let TuiEvent::Key(key_event) = event {
+        let event = if let TuiEvent::Key(mut key_event) = event {
+            let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+            if self.should_recover_vim_insert_escape(key_event) {
+                // Restore both strokes before chords or global shortcuts can consume them.
+                if let Some(escape) = self.route_key_chord_event(tui, escape) {
+                    self.handle_key_event(tui, app_server, escape).await;
+                }
+                key_event.modifiers.remove(KeyModifiers::ALT);
+            }
+
             let Some(key_event) = self.route_key_chord_event(tui, key_event) else {
                 return Ok(AppRunControl::Continue);
             };
@@ -975,11 +986,17 @@ impl App {
             .chat_widget
             .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
             .is_some();
-        if std::mem::replace(
+        let dashboard_was_visible = std::mem::replace(
             &mut self.agents_overview.rendered_full_screen,
             dashboard_visible,
-        ) && !dashboard_visible
-        {
+        );
+        // Full-height inline overlays scroll history off screen without a terminal resize.
+        // Rebuild it once when returning to a content-height chat viewport.
+        let restoring_inline_viewport = !tui.is_alt_screen_active()
+            && tui.terminal.viewport_area.height == screen_size.height
+            && self.with_chat_widget_frame(screen_size.width, |height, _| height)
+                < screen_size.height;
+        if !dashboard_visible && (dashboard_was_visible || restoring_inline_viewport) {
             self.schedule_immediate_resize_reflow(tui);
             self.maybe_run_resize_reflow(tui, screen_size)?;
         }
