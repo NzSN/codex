@@ -11,12 +11,34 @@ impl AsyncQuestions {
             return;
         }
         let was_empty = self.state.pending.is_empty();
-        self.state
-            .pending
-            .extend(questions.iter().map(|question| PendingQuestion {
-                question: question.clone(),
+        let expires_at = (!self.expanded).then(|| Instant::now() + Duration::from_secs(30));
+        self.state.pending.extend(questions.iter().map(|question| {
+            // Bound work before cloning or wrapping model-authored suggestions.
+            let question = AsyncUserInputQuestion {
+                title: question.title.clone(),
+                options: question.options.as_ref().map(|options| {
+                    options
+                        .iter()
+                        .take(32)
+                        .filter(|label| label.len() <= 512)
+                        .cloned()
+                        .collect()
+                }),
+            };
+            let has_options = question
+                .options
+                .as_ref()
+                .is_some_and(|options| !options.is_empty());
+            let mut options_state = ScrollState::new();
+            options_state.selected_idx = has_options.then_some(0);
+            PendingQuestion {
+                message_id: message_id.into(),
+                question,
+                options_state,
                 draft: ComposerDraft::default(),
-            }));
+                expires_at,
+            }
+        }));
         if was_empty {
             self.state.current_idx = 0;
             self.restore_current_draft();
@@ -26,6 +48,9 @@ impl AsyncQuestions {
     pub(crate) fn set_expanded(&mut self, expanded: bool) {
         self.save_current_draft();
         self.expanded = expanded && !self.state.pending.is_empty();
+        if self.expanded {
+            self.snooze_auto_resolution();
+        }
     }
 
     pub(crate) fn navigate(&mut self, forward: bool) -> bool {
@@ -38,9 +63,31 @@ impl AsyncQuestions {
             return false;
         };
         self.save_current_draft();
+        self.visible_options.set((0, 0));
         self.state.current_idx = next;
         self.restore_current_draft();
         true
+    }
+
+    pub(super) fn snooze_auto_resolution(&mut self) {
+        for question in &mut self.state.pending {
+            question.expires_at = None;
+        }
+    }
+
+    pub(super) fn timer_remaining(&self, now: Instant) -> Option<Duration> {
+        self.state
+            .pending
+            .iter()
+            .filter_map(|question| question.expires_at?.checked_duration_since(now))
+            .filter(|remaining| !remaining.is_zero())
+            .min()
+    }
+
+    pub(crate) fn countdown(&self, now: Instant) -> Option<String> {
+        self.timer_remaining(now)
+            .filter(|remaining| *remaining <= Duration::from_secs(20))
+            .map(|remaining| format!("{}s", remaining.as_secs_f64().ceil() as u64))
     }
 
     pub(super) fn go_next_or_submit(&mut self) {
@@ -51,14 +98,34 @@ impl AsyncQuestions {
         let Some(answer) = self.current_answer() else {
             return;
         };
-        let text = answer.draft.text_with_pending();
+        let selected = answer
+            .options_state
+            .selected_idx
+            .and_then(|index| answer.question.options.as_ref()?.get(index))
+            .map(String::as_str)
+            .unwrap_or_default();
+        // Only a fully displayed model-authored option may become user authorization.
+        let (first, count) = self.visible_options.get();
+        let index = self.selected_option_index().unwrap_or(0);
+        if !self.focus_is_notes() && !(first..first + count).contains(&index) {
+            self.composer.show_footer_flash(
+                "Expand terminal to read the entire option".into(),
+                Duration::from_secs(5),
+            );
+            return;
+        }
+        let text = if self.focus_is_notes() {
+            answer.draft.text_with_pending()
+        } else {
+            selected.to_string()
+        };
         let text = text.trim();
         let framing = AnsweredQuestion::new(&answer.question.title).render();
         let limit = codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS - framing.chars().count();
         if text.chars().count() > limit {
             self.composer.show_footer_flash(
                 format!("Answer too long; limit {limit} characters").into(),
-                std::time::Duration::from_secs(5),
+                Duration::from_secs(5),
             );
         } else if !text.is_empty() {
             self.submission = Some(QuestionSubmission::Submit(format!("{framing}{text}")));
@@ -70,6 +137,7 @@ impl AsyncQuestions {
             return;
         }
         self.composer.flush_pending_input();
+        self.visible_options.set((0, 0));
         self.state.pending.remove(self.state.current_idx);
         if self.state.current_idx >= self.state.pending.len() {
             self.state.current_idx = 0;
@@ -77,5 +145,29 @@ impl AsyncQuestions {
         self.expanded &= !self.state.pending.is_empty();
         self.restore_current_draft();
         self.composer.reset_vim_mode();
+    }
+
+    pub(crate) fn capture(&mut self) -> QuestionState {
+        self.composer.cancel_history_search();
+        self.save_current_draft();
+        self.state.expanded = self.expanded;
+        self.state.clone()
+    }
+
+    pub(crate) fn restore(&mut self, saved: QuestionState) {
+        self.visible_options.set((0, 0));
+        let incoming = std::mem::replace(&mut self.state, saved);
+        self.state.pending.extend(
+            incoming
+                .pending
+                .into_iter()
+                .filter(|question| !self.state.seen_ids.contains(&question.message_id)),
+        );
+        self.state.seen_ids.extend(incoming.seen_ids);
+        self.expanded = self.state.expanded && !self.state.pending.is_empty();
+        if self.expanded {
+            self.snooze_auto_resolution();
+        }
+        self.restore_current_draft();
     }
 }

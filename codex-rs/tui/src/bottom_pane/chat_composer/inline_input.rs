@@ -19,18 +19,47 @@ impl ChatComposer {
         self.restore_draft(draft);
     }
 
+    pub(crate) fn inline_flash(&self) -> Option<Line<'static>> {
+        self.footer
+            .flash
+            .as_ref()
+            .filter(|_| self.footer.flash_visible())
+            .map(|flash| flash.line.clone())
+    }
+
     pub(crate) fn reset_vim_mode(&mut self) {
         self.vim_history = VimHistory::default();
         self.draft.textarea.enter_vim_insert_mode();
     }
 
+    /// Refresh at traversal start without resetting recalled entries or pending lookups.
+    pub(crate) fn copy_history_for_key(&mut self, composer: &Self, key: KeyEvent) {
+        let recall = self.is_empty()
+            && !self.history.is_navigating()
+            && if self.draft.textarea.is_vim_normal_mode() {
+                self.vim_normal_keymap.move_up.is_pressed(key)
+                    || self.vim_normal_keymap.move_down.is_pressed(key)
+            } else {
+                self.editor_keymap.move_up.is_pressed(key)
+                    || self.editor_keymap.move_down.is_pressed(key)
+            };
+        let search =
+            self.history_search_previous_keys.is_pressed(key) && !self.handles_key_as_editing(key);
+        if self.history_search.is_none() && (recall || search) {
+            self.history = composer.history.clone();
+            self.history.reset_navigation();
+        }
+    }
+
     /// Give modal editing precedence over a containing view's submit/navigation keys.
+    /// Up/Down remain available to inline choices; j/k keep their Vim editing behavior.
     pub(crate) fn handles_key_as_editing(&self, key: KeyEvent) -> bool {
         self.history_search.is_some()
             || self.should_handle_vim_insert_escape(key)
             || self.draft.textarea.is_vim_operator_pending()
             || self.draft.textarea.wants_vim_search_key(key)
             || (self.draft.textarea.is_vim_normal_mode()
+                && !matches!(key.code, KeyCode::Up | KeyCode::Down)
                 && !self.submit_keys.is_pressed(key)
                 && !self.queue_keys.is_pressed(key)
                 && (self.vim_normal_keymap.move_up.is_pressed(key)
@@ -64,6 +93,9 @@ impl ChatComposer {
         if let Some(query) = self.draft.textarea.vim_query() {
             return query.cursor_pos(query_area);
         }
+        if self.history_search.is_some() {
+            return self.history_search_query_cursor_pos(query_area);
+        }
         self.draft
             .textarea
             .cursor_pos_with_state(area, *self.draft.textarea_state.borrow())
@@ -90,6 +122,12 @@ impl ChatComposer {
         if let Some(query) = self.draft.textarea.vim_query() {
             area.height = area.height.saturating_sub(1);
             query.render(
+                Rect::new(area.x, area.bottom(), area.width, /*height*/ 1),
+                buf,
+            );
+        } else if let Some(line) = self.history_search_footer_line() {
+            area.height = area.height.saturating_sub(1);
+            line.render(
                 Rect::new(area.x, area.bottom(), area.width, /*height*/ 1),
                 buf,
             );
