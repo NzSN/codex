@@ -1,5 +1,8 @@
 //! App-level orchestration tests for the TUI.
 
+#[path = "tests/daybreak_tests.rs"]
+mod daybreak_tests;
+
 #[path = "tests/advanced_reasoning_tests.rs"]
 mod advanced_reasoning_tests;
 #[path = "tests/agents_navigation_tests.rs"]
@@ -699,7 +702,16 @@ async fn history_lookup_response_is_routed_to_requesting_thread() -> Result<()> 
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let thread_id = ThreadId::new();
 
-    app.lookup_message_history_entry(thread_id, /*offset*/ 0, /*log_id*/ 1)
+    let local_home = tempfile::tempdir()?;
+    app.local_settings.codex_home = AbsolutePathBuf::from_absolute_path(local_home.path())?;
+    let history_config = codex_message_history::HistoryConfig::new(
+        app.local_settings.codex_home.clone(),
+        &app.local_settings.history,
+    );
+    codex_message_history::append_entry("local prompt", thread_id, &history_config).await?;
+    let (log_id, _) = codex_message_history::history_metadata(&history_config).await;
+
+    app.lookup_message_history_entry(thread_id, /*offset*/ 0, log_id)
         .await?;
 
     let app_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
@@ -719,13 +731,13 @@ async fn history_lookup_response_is_routed_to_requesting_thread() -> Result<()> 
         event,
         HistoryLookupResponse::Entry {
             offset: 0,
-            log_id: 1,
-            entry: None,
+            log_id,
+            entry: Some("local prompt".to_string()),
         }
     );
 
-    let cursor = codex_message_history::HistoryBatchCursor::new(/*end_offset*/ 10);
-    app.lookup_message_history_batch(thread_id, cursor, /*log_id*/ 1)
+    let cursor = codex_message_history::HistoryBatchCursor::new(/*end_offset*/ 1);
+    app.lookup_message_history_batch(thread_id, cursor, log_id)
         .await?;
     let app_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
         .await
@@ -741,7 +753,15 @@ async fn history_lookup_response_is_routed_to_requesting_thread() -> Result<()> 
     assert_eq!(routed_thread_id, thread_id);
     assert_eq!(
         event,
-        HistoryLookupResponse::BatchError { cursor, log_id: 1 }
+        HistoryLookupResponse::Batch {
+            cursor,
+            log_id,
+            entries: vec![HistoryBatchEntryResponse {
+                offset: 0,
+                entry: Some("local prompt".to_string()),
+            }],
+            next_older_cursor: None,
+        }
     );
 
     Ok(())
@@ -4058,6 +4078,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
                 section: None,
                 section_entered_at: None,
                 project_id: None,
+                daybreak_enabled: None,
                 history_mode: Default::default(),
                 model_provider: "agent-provider".to_string(),
                 model: None,
@@ -4161,6 +4182,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
                 section: None,
                 section_entered_at: None,
                 project_id: None,
+                daybreak_enabled: None,
                 history_mode: Default::default(),
                 model_provider: "agent-provider".to_string(),
                 model: None,
@@ -4231,6 +4253,7 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         section: None,
         section_entered_at: None,
         project_id: None,
+        daybreak_enabled: None,
         history_mode: Default::default(),
         model_provider: "read-provider".to_string(),
         model: None,
@@ -5463,6 +5486,7 @@ async fn make_test_app() -> App {
     let session_telemetry = test_session_telemetry(&config, model.as_str());
 
     App {
+        feature_write_lock: Arc::default(),
         model_catalog: chat_widget.model_catalog(),
         session_telemetry,
         app_event_tx,
@@ -5509,6 +5533,7 @@ async fn make_test_app() -> App {
         windows_sandbox: WindowsSandboxState::default(),
         thread_event_channels: HashMap::new(),
         temporary_structured_requests: HashMap::new(),
+        pending_thread_titles: HashSet::new(),
         thread_event_listener_tasks: HashMap::new(),
         agent_navigation: AgentNavigationState::default(),
         agents_overview: Default::default(),
@@ -5547,6 +5572,7 @@ pub(super) async fn make_test_app_with_channels() -> (
 
     (
         App {
+            feature_write_lock: Arc::default(),
             model_catalog: chat_widget.model_catalog(),
             session_telemetry,
             app_event_tx,
@@ -5593,6 +5619,7 @@ pub(super) async fn make_test_app_with_channels() -> (
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             temporary_structured_requests: HashMap::new(),
+            pending_thread_titles: HashSet::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
             agents_overview: Default::default(),

@@ -15,6 +15,7 @@ use crate::app_event::PluginLocation;
 use crate::app_event::PluginRemoteSectionError;
 use crate::app_event::RateLimitRefreshOrigin;
 use crate::app_event::RunningTaskExitAction;
+use crate::app_event::ThreadTitleDestination;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -219,6 +220,7 @@ mod config_persistence;
 mod connector_mentions;
 mod event_dispatch;
 mod exit_summary;
+mod experimental_features;
 mod file_change_approvals;
 mod history_pagination;
 mod history_ui;
@@ -226,6 +228,7 @@ mod input;
 mod loaded_threads;
 mod misalignment_policy;
 mod model_defaults;
+mod new_session;
 mod pending_interactive_replay;
 mod permission_shortcuts;
 mod pets;
@@ -536,6 +539,7 @@ struct InitialHistoryReplayBuffer {
 }
 
 pub(crate) struct App {
+    feature_write_lock: Arc<tokio::sync::Mutex<()>>,
     model_catalog: Arc<ModelCatalog>,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) app_event_tx: AppEventSender,
@@ -612,6 +616,8 @@ pub(crate) struct App {
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     temporary_structured_requests: HashMap<ThreadId, mpsc::UnboundedSender<ServerNotification>>,
+    /// Track title generation across thread switches and deduplicate automatic requests.
+    pending_thread_titles: HashSet<(ThreadId, ThreadTitleDestination)>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
     agents_overview: agents_overview::AgentsOverviewState,
@@ -982,6 +988,7 @@ impl App {
     }
 
     fn render_chat_widget_frame(&mut self, tui: &mut tui::Tui, screen_size: Size) -> Result<Rect> {
+        self.sync_thread_title_progress();
         let dashboard_visible = self
             .chat_widget
             .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
