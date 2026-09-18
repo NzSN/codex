@@ -35,9 +35,9 @@ pub(super) async fn record_failed_review(
         ),
         target_item_id: guardian_request_target_item_id(&params.request),
         reviewer_thread_id: reviewer.thread_id(),
-        model: &params.model,
-        action: &action.text,
-        action_truncated: action.truncated,
+        model: &params.review_model.model,
+        action: &action,
+        action_truncated: false,
         instructions: Some(&instructions.text),
         history: history.raw_items().collect(),
     });
