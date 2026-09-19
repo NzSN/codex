@@ -253,7 +253,7 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
 }
 
 #[test]
-fn plaintext_collaboration_requires_an_explicit_empty_encryption_marker() {
+fn plaintext_collaboration_accepts_absent_or_empty_encryption_marker() {
     let config = crate::config::MultiAgentV2Config {
         tool_namespace: Some("agents".to_string()),
         message_delivery: codex_features::MultiAgentV2MessageDelivery::PlaintextCompatible,
@@ -269,13 +269,19 @@ fn plaintext_collaboration_requires_an_explicit_empty_encryption_marker() {
     };
     assert_eq!(
         call.direct_source_for_message_delivery(&config),
-        ToolCallSource::Direct,
+        ToolCallSource::DirectPlaintextMessage,
     );
 
     call.encrypted_function_args = Some(Vec::new());
     assert_eq!(
         call.direct_source_for_message_delivery(&config),
         ToolCallSource::DirectPlaintextMessage,
+    );
+
+    call.encrypted_function_args = Some(vec!["encrypted".to_string()]);
+    assert_eq!(
+        call.direct_source_for_message_delivery(&config),
+        ToolCallSource::Direct,
     );
 }
 

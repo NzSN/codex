@@ -2208,13 +2208,12 @@ async fn multi_agent_v2_openai_parent_sends_plain_task_to_other_provider() -> Re
         "agent_type": "other_provider",
         "fork_turns": "none",
     });
-    let mut spawn_event = ev_function_call_with_namespace(
+    let spawn_event = ev_function_call_with_namespace(
         SPAWN_CALL_ID,
         "agents",
         "spawn_agent",
         &spawn_args.to_string(),
     );
-    spawn_event["item"]["encrypted_function_args"] = json!([]);
     let parent_request = mount_sse_once_match(
         &server,
         |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),

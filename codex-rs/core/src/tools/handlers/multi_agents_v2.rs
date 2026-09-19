@@ -12,6 +12,7 @@ use crate::tools::handlers::multi_agents_common::*;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use base64::Engine as _;
 use codex_protocol::items::CollabAgentTool;
 use codex_protocol::items::CollabAgentToolCallItem;
 use codex_protocol::items::CollabAgentToolCallStatus;
@@ -41,6 +42,10 @@ mod send_message;
 mod spawn;
 pub(crate) mod wait;
 
+#[cfg(test)]
+#[path = "multi_agents_v2_tests.rs"]
+mod tests;
+
 pub(crate) async fn emit_sub_agent_activity(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
@@ -68,8 +73,22 @@ fn agent_message_from_tool(
             codex_features::MultiAgentV2MessageDelivery::PlaintextCompatible,
             crate::tools::context::ToolCallSource::DirectPlaintextMessage
             | crate::tools::context::ToolCallSource::CodeMode { .. },
-        )
-        | (
+        ) => {
+            // The unencrypted schema is the contract. Reject the known OpenAI
+            // ciphertext format if a backend still returns it without metadata.
+            let looks_encrypted = message.starts_with("gAAAAA")
+                && base64::engine::general_purpose::URL_SAFE
+                    .decode(&message)
+                    .is_ok_and(|decoded| decoded.len() >= 57 && decoded[0] == 0x80);
+            if looks_encrypted {
+                Err(FunctionCallError::RespondToModel(
+                    "Plaintext collaboration received an encrypted task body".to_string(),
+                ))
+            } else {
+                Ok(AgentMessage::Plaintext(message))
+            }
+        }
+        (
             codex_features::MultiAgentV2MessageDelivery::Encrypted,
             crate::tools::context::ToolCallSource::DirectPlaintextMessage,
         ) => Ok(AgentMessage::Plaintext(message)),
