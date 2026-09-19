@@ -2910,6 +2910,36 @@ async fn multi_agent_v2_message_schemas_are_encrypted() {
 }
 
 #[tokio::test]
+async fn multi_agent_v2_message_schemas_are_plaintext_in_compatible_mode() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+        update_config(turn, |config| {
+            config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+            config.multi_agent_v2.message_delivery =
+                codex_features::MultiAgentV2MessageDelivery::PlaintextCompatible;
+        });
+    })
+    .await;
+    let ToolSpec::Namespace(namespace) = plan.visible_spec("agents") else {
+        panic!("expected agents namespace");
+    };
+    for tool_name in ["spawn_agent", "send_message", "followup_task"] {
+        let Some(ResponsesApiNamespaceTool::Function(tool)) = namespace.tools.iter().find(|tool| {
+            matches!(tool, ResponsesApiNamespaceTool::Function(tool) if tool.name == tool_name)
+        }) else {
+            panic!("expected {tool_name} in agents namespace");
+        };
+        let properties = tool.parameters.properties.as_ref().expect("object params");
+        assert_eq!(
+            properties
+                .get("message")
+                .and_then(|schema| schema.encrypted),
+            None
+        );
+    }
+}
+
+#[tokio::test]
 async fn multi_agent_v2_can_disable_wait_agent() {
     let plan = probe(|turn| {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);

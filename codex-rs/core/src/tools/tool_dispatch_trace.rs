@@ -9,6 +9,7 @@ use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::router::is_plaintext_collaboration_tool;
 use codex_rollout_trace::ExecutionStatus;
 use codex_rollout_trace::ToolDispatchInvocation;
 use codex_rollout_trace::ToolDispatchPayload;
@@ -60,6 +61,20 @@ impl ToolDispatchTrace {
 }
 
 fn tool_dispatch_invocation(invocation: &ToolInvocation) -> Option<ToolDispatchInvocation> {
+    let plaintext_collaboration =
+        matches!(invocation.source, ToolCallSource::DirectPlaintextMessage)
+            || is_plaintext_collaboration_tool(
+                &invocation.tool_name,
+                &invocation.turn.config.multi_agent_v2,
+            );
+    let payload =
+        if plaintext_collaboration && matches!(invocation.payload, ToolPayload::Function { .. }) {
+            ToolDispatchPayload::Function {
+                arguments: "[plaintext collaboration arguments redacted]".to_string(),
+            }
+        } else {
+            tool_dispatch_payload(&invocation.payload)
+        };
     let requester = match &invocation.source {
         ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage => {
             ToolDispatchRequester::Model {
@@ -87,7 +102,7 @@ fn tool_dispatch_invocation(invocation: &ToolInvocation) -> Option<ToolDispatchI
             .filter(|_| !invocation.tool_name.is_default_namespace())
             .cloned(),
         requester,
-        payload: tool_dispatch_payload(&invocation.payload),
+        payload,
     })
 }
 

@@ -49,13 +49,26 @@ fn tool_log_payload_redacts_plaintext_multi_agent_messages() {
     let payload = ToolPayload::Function {
         arguments: json!({"target": "/root/worker", "message": "secret message"}).to_string(),
     };
+    let tool_name = ToolName::namespaced("agents", "send_message");
+    let mut config = crate::config::MultiAgentV2Config::default();
     assert_eq!(
-        tool_log_payload(&payload, &ToolCallSource::DirectPlaintextMessage),
+        tool_log_payload(
+            &payload,
+            &ToolCallSource::DirectPlaintextMessage,
+            &tool_name,
+            &config,
+        ),
         "[plaintext arguments]"
     );
     assert_eq!(
-        tool_log_payload(&payload, &ToolCallSource::Direct),
+        tool_log_payload(&payload, &ToolCallSource::Direct, &tool_name, &config),
         payload.log_payload()
+    );
+    config.tool_namespace = Some("agents".to_string());
+    config.message_delivery = codex_features::MultiAgentV2MessageDelivery::PlaintextCompatible;
+    assert_eq!(
+        tool_log_payload(&payload, &ToolCallSource::Direct, &tool_name, &config),
+        "[plaintext arguments]"
     );
 }
 
@@ -237,6 +250,33 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
     }
 
     Ok(())
+}
+
+#[test]
+fn plaintext_collaboration_requires_an_explicit_empty_encryption_marker() {
+    let config = crate::config::MultiAgentV2Config {
+        tool_namespace: Some("agents".to_string()),
+        message_delivery: codex_features::MultiAgentV2MessageDelivery::PlaintextCompatible,
+        ..Default::default()
+    };
+    let mut call = ToolCall {
+        tool_name: ToolName::namespaced("agents", "spawn_agent"),
+        call_id: "call-plaintext".to_string(),
+        payload: ToolPayload::Function {
+            arguments: r#"{"message":"gAAAAAopaque"}"#.to_string(),
+        },
+        encrypted_function_args: None,
+    };
+    assert_eq!(
+        call.direct_source_for_message_delivery(&config),
+        ToolCallSource::Direct,
+    );
+
+    call.encrypted_function_args = Some(Vec::new());
+    assert_eq!(
+        call.direct_source_for_message_delivery(&config),
+        ToolCallSource::DirectPlaintextMessage,
+    );
 }
 
 #[tokio::test]

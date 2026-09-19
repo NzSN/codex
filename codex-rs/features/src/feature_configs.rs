@@ -250,6 +250,14 @@ where
     Ok(feature)
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MultiAgentV2MessageDelivery {
+    #[default]
+    Encrypted,
+    PlaintextCompatible,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MultiAgentV2ConfigToml {
@@ -284,6 +292,8 @@ pub struct MultiAgentV2ConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = 64), regex(pattern = r"^[a-zA-Z0-9_-]+$"))]
     pub tool_namespace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_delivery: Option<MultiAgentV2MessageDelivery>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hide_spawn_agent_metadata: Option<bool>,
     /// Exposes `model` and `reasoning_effort` on the multi-agent v2 spawn tool and adds

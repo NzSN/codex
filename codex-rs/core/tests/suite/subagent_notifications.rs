@@ -6,6 +6,7 @@ use codex_core::TurnStartOptions;
 use codex_core::config::AgentRoleConfig;
 use codex_core::config::CurrentTimeReminderConfig;
 use codex_features::Feature;
+use codex_features::MultiAgentV2MessageDelivery;
 use codex_history::RolloutItem;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::ThreadId;
@@ -2194,6 +2195,128 @@ async fn spawned_multi_agent_v2_child_inherits_parent_developer_context() -> Res
     assert!(child_request.body_contains_text("Parent developer instructions."));
     assert!(child_request.body_contains_text(CHILD_PROMPT));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_openai_parent_sends_plain_task_to_other_provider() -> Result<()> {
+    const TASK: &str = "Return nonce CROSS_PROVIDER_PLAIN_TASK";
+    let server = start_mock_server().await;
+    let spawn_args = json!({
+        "message": TASK,
+        "task_name": "worker",
+        "agent_type": "other_provider",
+        "fork_turns": "none",
+    });
+    let mut spawn_event = ev_function_call_with_namespace(
+        SPAWN_CALL_ID,
+        "agents",
+        "spawn_agent",
+        &spawn_args.to_string(),
+    );
+    spawn_event["item"]["encrypted_function_args"] = json!([]);
+    let parent_request = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("parent-plain-1"),
+            spawn_event,
+            ev_completed("parent-plain-1"),
+        ]),
+    )
+    .await;
+    let child_request = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            decoded_body(req)
+                .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+                .is_some_and(|body| body["model"] == "gpt-5.5" && body.to_string().contains(TASK))
+        },
+        sse(vec![
+            ev_response_created("child-plain-1"),
+            ev_completed("child-plain-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("parent-plain-2"),
+            ev_completed("parent-plain-2"),
+        ]),
+    )
+    .await;
+
+    let test = test_codex()
+        .with_model("gpt-5.6-sol")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("enable collab");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("enable v2");
+            config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+            config.multi_agent_v2.message_delivery =
+                MultiAgentV2MessageDelivery::PlaintextCompatible;
+            let mut provider = config.model_provider.clone();
+            // A router can retain the OpenAI display name while routing this role elsewhere.
+            provider.name = "OpenAI".to_string();
+            config
+                .model_providers
+                .insert("other-provider".to_string(), provider);
+            let role_path = config.codex_home.join("other-provider-role.toml");
+            std::fs::write(
+                &role_path,
+                "model = \"gpt-5.5\"\nmodel_provider = \"other-provider\"\n",
+            )
+            .expect("write role config");
+            config.agent_roles.insert(
+                "other_provider".to_string(),
+                AgentRoleConfig {
+                    description: Some("Other provider".to_string()),
+                    config_file: Some(role_path.to_path_buf()),
+                    nickname_candidates: None,
+                },
+            );
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn(TURN_1_PROMPT).await?;
+
+    let parent_request = parent_request.single_request();
+    let tools = format!(
+        "{}{}",
+        parent_request.body_json()["tools"],
+        json!(parent_request.inputs_of_type("additional_tools")),
+    );
+    assert!(tools.contains("agents"));
+    assert!(!tools.contains("\"encrypted\":true"));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let child_request = loop {
+        if let Some(request) = child_request
+            .requests()
+            .into_iter()
+            .find(|request| request.body_json()["model"] == "gpt-5.5")
+        {
+            break request;
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for child request");
+        }
+        sleep(Duration::from_millis(10)).await;
+    };
+    assert_eq!(child_request.body_json()["model"], json!("gpt-5.5"));
+    let input = child_request.input();
+    assert!(input.iter().any(|item| {
+        item["type"] == "message"
+            && item["role"] == "user"
+            && item["content"].to_string().contains(TASK)
+    }));
+    assert!(child_request.inputs_of_type("agent_message").is_empty());
     Ok(())
 }
 

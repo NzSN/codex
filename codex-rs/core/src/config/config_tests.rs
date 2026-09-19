@@ -11739,6 +11739,7 @@ subagent_usage_hint_text = "Subagent guidance."
 subagent_developer_instructions = "  Delegate carefully.  "
 multi_agent_mode_hint_text = "Custom mode guidance."
 tool_namespace = "agents"
+message_delivery = "plaintext_compatible"
 hide_spawn_agent_metadata = true
 expose_spawn_agent_model_overrides = false
 wait_agent_enabled = false
@@ -11793,6 +11794,10 @@ max_concurrent_threads_per_session = 9
     assert_eq!(
         config.multi_agent_v2.tool_namespace.as_deref(),
         Some("agents")
+    );
+    assert_eq!(
+        config.multi_agent_v2.message_delivery,
+        codex_features::MultiAgentV2MessageDelivery::PlaintextCompatible
     );
     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
     assert!(!config.multi_agent_v2.expose_spawn_agent_model_overrides);
@@ -12349,6 +12354,28 @@ tool_namespace = "{namespace}"
         assert_eq!(err.to_string(), expected_message);
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_plaintext_requires_custom_namespace() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        "[features.multi_agent_v2]\nenabled = true\nmessage_delivery = \"plaintext_compatible\"\n",
+    )?;
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+        .expect_err("plaintext delivery with collaboration namespace should fail");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "features.multi_agent_v2.message_delivery = plaintext_compatible requires a non-reserved tool_namespace"
+    );
     Ok(())
 }
 

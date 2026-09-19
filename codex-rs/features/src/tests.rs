@@ -742,6 +742,7 @@ subagent_usage_hint_text = "Subagent guidance."
 subagent_developer_instructions = "Delegate carefully."
 multi_agent_mode_hint_text = "Custom mode guidance."
 tool_namespace = "agents"
+message_delivery = "plaintext_compatible"
 hide_spawn_agent_metadata = true
 expose_spawn_agent_model_overrides = true
 wait_agent_enabled = false
@@ -769,6 +770,7 @@ non_code_mode_only = true
             subagent_developer_instructions: Some("Delegate carefully.".to_string()),
             multi_agent_mode_hint_text: Some("Custom mode guidance.".to_string()),
             tool_namespace: Some("agents".to_string()),
+            message_delivery: Some(crate::MultiAgentV2MessageDelivery::PlaintextCompatible),
             hide_spawn_agent_metadata: Some(true),
             expose_spawn_agent_model_overrides: Some(true),
             wait_agent_enabled: Some(false),

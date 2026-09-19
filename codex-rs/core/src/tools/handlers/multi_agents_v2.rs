@@ -54,13 +54,27 @@ pub(crate) async fn emit_sub_agent_activity(
 fn agent_message_from_tool(
     message: String,
     source: &crate::tools::context::ToolCallSource,
-) -> AgentMessage {
-    if matches!(
-        source,
-        crate::tools::context::ToolCallSource::DirectPlaintextMessage
-    ) {
-        AgentMessage::Plaintext(message)
-    } else {
-        AgentMessage::Encrypted(message)
+    message_delivery: codex_features::MultiAgentV2MessageDelivery,
+) -> Result<AgentMessage, FunctionCallError> {
+    match (message_delivery, source) {
+        (
+            codex_features::MultiAgentV2MessageDelivery::PlaintextCompatible,
+            crate::tools::context::ToolCallSource::Direct,
+        ) => Err(FunctionCallError::RespondToModel(
+            "Plaintext collaboration requires a readable message; the provider returned encrypted tool arguments"
+                .to_string(),
+        )),
+        (
+            codex_features::MultiAgentV2MessageDelivery::PlaintextCompatible,
+            crate::tools::context::ToolCallSource::DirectPlaintextMessage
+            | crate::tools::context::ToolCallSource::CodeMode { .. },
+        )
+        | (
+            codex_features::MultiAgentV2MessageDelivery::Encrypted,
+            crate::tools::context::ToolCallSource::DirectPlaintextMessage,
+        ) => Ok(AgentMessage::Plaintext(message)),
+        (codex_features::MultiAgentV2MessageDelivery::Encrypted, _) => {
+            Ok(AgentMessage::Encrypted(message))
+        }
     }
 }

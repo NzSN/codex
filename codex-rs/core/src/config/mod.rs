@@ -74,6 +74,7 @@ use codex_features::FeatureToml;
 use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
+use codex_features::MultiAgentV2MessageDelivery;
 use codex_features::NetworkProxyConfigToml;
 use codex_features::SleepToolMode;
 use codex_features::TokenBudgetConfigToml;
@@ -1300,6 +1301,7 @@ pub struct MultiAgentV2Config {
     pub subagent_developer_instructions: Option<String>,
     pub multi_agent_mode_hint_text: Option<String>,
     pub tool_namespace: Option<String>,
+    pub message_delivery: MultiAgentV2MessageDelivery,
     pub hide_spawn_agent_metadata: bool,
     pub expose_spawn_agent_model_overrides: bool,
     pub wait_agent_enabled: bool,
@@ -1319,6 +1321,7 @@ impl MultiAgentV2Config {
             subagent_developer_instructions: None,
             multi_agent_mode_hint_text: None,
             tool_namespace: Some(DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE.to_string()),
+            message_delivery: MultiAgentV2MessageDelivery::Encrypted,
             hide_spawn_agent_metadata: true,
             expose_spawn_agent_model_overrides: true,
             wait_agent_enabled: true,
@@ -2754,6 +2757,9 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         .and_then(|config| config.tool_namespace.as_ref())
         .cloned()
         .or(default.tool_namespace);
+    let message_delivery = base
+        .and_then(|config| config.message_delivery)
+        .unwrap_or(default.message_delivery);
     let non_code_mode_only = base
         .and_then(|config| config.non_code_mode_only)
         .unwrap_or(default.non_code_mode_only);
@@ -2769,6 +2775,7 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         subagent_developer_instructions,
         multi_agent_mode_hint_text,
         tool_namespace,
+        message_delivery,
         hide_spawn_agent_metadata,
         expose_spawn_agent_model_overrides,
         wait_agent_enabled,
@@ -3781,6 +3788,14 @@ impl Config {
             ));
         }
         validate_multi_agent_v2_tool_namespace(multi_agent_v2.tool_namespace.as_deref())?;
+        if multi_agent_v2.message_delivery == MultiAgentV2MessageDelivery::PlaintextCompatible
+            && multi_agent_v2.tool_namespace.as_deref().is_none_or(|name| name == "collaboration")
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "features.multi_agent_v2.message_delivery = plaintext_compatible requires a non-reserved tool_namespace",
+            ));
+        }
         let agents_enabled = cfg
             .agents
             .as_ref()

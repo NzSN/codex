@@ -59,7 +59,11 @@ pub(super) async fn handle_message_string_tool(
             session.thread_id,
             &turn,
             receiver_thread_id,
-            agent_message_from_tool(message, &source),
+            agent_message_from_tool(
+                message,
+                &source,
+                turn.config.multi_agent_v2.message_delivery,
+            )?,
             mode,
         )
         .await

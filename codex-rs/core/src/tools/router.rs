@@ -1,3 +1,4 @@
+use crate::config::MultiAgentV2Config;
 use crate::function_tool::FunctionCallError;
 use crate::responses_metadata::TurnToolNamespacesInfo;
 use crate::session::session::Session;
@@ -42,6 +43,22 @@ pub struct ToolCall {
 }
 
 impl ToolCall {
+    pub(crate) fn direct_source_for_message_delivery(
+        &self,
+        config: &MultiAgentV2Config,
+    ) -> ToolCallSource {
+        if is_plaintext_collaboration_tool(&self.tool_name, config)
+            && self
+                .encrypted_function_args
+                .as_ref()
+                .is_some_and(std::vec::Vec::is_empty)
+        {
+            ToolCallSource::DirectPlaintextMessage
+        } else {
+            self.direct_source()
+        }
+    }
+
     pub(crate) fn direct_source(&self) -> ToolCallSource {
         if self.tool_name.namespace.as_deref() == Some("collaboration")
             && matches!(
@@ -60,11 +77,27 @@ impl ToolCall {
     }
 }
 
+pub(crate) fn is_plaintext_collaboration_tool(
+    tool_name: &ToolName,
+    config: &MultiAgentV2Config,
+) -> bool {
+    config.message_delivery == codex_features::MultiAgentV2MessageDelivery::PlaintextCompatible
+        && tool_name.namespace.as_deref() == config.tool_namespace.as_deref()
+        && matches!(
+            tool_name.name.as_str(),
+            "spawn_agent" | "send_message" | "followup_task"
+        )
+}
+
 pub(crate) fn tool_log_payload<'a>(
     payload: &'a ToolPayload,
     source: &ToolCallSource,
+    tool_name: &ToolName,
+    config: &MultiAgentV2Config,
 ) -> Cow<'a, str> {
-    if matches!(source, ToolCallSource::DirectPlaintextMessage) {
+    if matches!(source, ToolCallSource::DirectPlaintextMessage)
+        || is_plaintext_collaboration_tool(tool_name, config)
+    {
         return Cow::Borrowed("[plaintext arguments]");
     }
     payload.log_payload()

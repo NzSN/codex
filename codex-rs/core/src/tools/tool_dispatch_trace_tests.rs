@@ -206,6 +206,41 @@ async fn dispatch_lifecycle_trace_records_direct_and_code_mode_requesters() -> a
 }
 
 #[tokio::test]
+async fn plaintext_collaboration_trace_omits_task_text() -> anyhow::Result<()> {
+    const TASK: &str = "CROSS_PROVIDER_PRIVATE_TASK";
+    let temp = TempDir::new()?;
+    let (mut session, turn) = make_session_and_context().await;
+    attach_test_trace(&mut session, &turn, temp.path())?;
+    let tool_name = codex_tools::ToolName::namespaced("agents", "spawn_agent");
+    let registry = ToolRegistry::with_handler_for_test(Arc::new(TestHandler {
+        tool_name: tool_name.clone(),
+    }));
+    registry
+        .dispatch_any_with_terminal_outcome(
+            test_invocation_with_payload(
+                Arc::new(session),
+                Arc::new(turn),
+                "plain-spawn",
+                tool_name,
+                ToolCallSource::DirectPlaintextMessage,
+                ToolPayload::Function {
+                    arguments: format!(r#"{{"message":"{TASK}","task_name":"worker"}}"#),
+                },
+            ),
+            /*terminal_outcome_reached*/ None,
+        )
+        .await?;
+
+    let bundle = single_bundle_dir(temp.path())?;
+    let trace = fs::read_to_string(bundle.join("trace.jsonl"))?;
+    assert!(!trace.contains(TASK));
+    for file in fs::read_dir(bundle.join("payloads"))? {
+        assert!(!fs::read_to_string(file?.path())?.contains(TASK));
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn dispatch_lifecycle_trace_records_unsupported_tool_failures() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let (mut session, turn) = make_session_and_context().await;

@@ -2549,6 +2549,9 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "message_delivery": {
+          "$ref": "#/definitions/MultiAgentV2MessageDelivery"
+        },
         "min_wait_timeout_ms": {
           "format": "int64",
           "maximum": 3600000.0,
@@ -2590,6 +2593,13 @@
         }
       },
       "type": "object"
+    },
+    "MultiAgentV2MessageDelivery": {
+      "enum": [
+        "encrypted",
+        "plaintext_compatible"
+      ],
+      "type": "string"
     },
     "NetworkDomainPermissionToml": {
       "enum": [

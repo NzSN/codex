@@ -3918,7 +3918,22 @@ impl Session {
         model_info: &ModelInfo,
         communication: InterAgentCommunication,
     ) {
-        let response_item = communication.to_model_input_item();
+        let response_item = if turn_context.config.multi_agent_v2.message_delivery
+            == codex_features::MultiAgentV2MessageDelivery::PlaintextCompatible
+            && communication.encrypted_content.is_none()
+        {
+            codex_protocol::models::ResponseItem::Message {
+                id: communication.id.clone(),
+                role: "user".to_string(),
+                content: vec![codex_protocol::models::ContentItem::InputText {
+                    text: communication.content.clone(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            }
+        } else {
+            communication.to_model_input_item()
+        };
         let (items, _) = self
             .prepare_conversation_items_for_history(
                 turn_context,
