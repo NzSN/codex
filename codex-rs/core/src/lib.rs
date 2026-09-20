@@ -76,6 +76,7 @@ mod hook_mcp_executor;
 mod hook_runtime;
 mod image_preparation;
 mod installation_id;
+mod inter_agent_request_projection;
 pub(crate) mod mcp;
 mod mcp_skill_dependencies;
 mod mcp_tool_approval_templates;

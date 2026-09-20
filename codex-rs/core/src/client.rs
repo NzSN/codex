@@ -90,6 +90,7 @@ use codex_protocol::protocol::AuthRecoveryEvent;
 use codex_protocol::protocol::Event as ProtocolEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InternalSessionSource;
+use codex_protocol::protocol::MultiAgentTaskPayload;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
@@ -259,6 +260,7 @@ impl RequestRouteTelemetry {
 #[derive(Debug, Clone)]
 pub struct ModelClient {
     state: Arc<ModelClientState>,
+    multi_agent_task_payload: MultiAgentTaskPayload,
     agent_identity_policy: AgentIdentityAuthPolicy,
     prompt_cache_key_override: Option<String>,
     codex_responses_headers: Option<Arc<CodexResponsesHeaders>>,
@@ -519,6 +521,7 @@ impl ModelClient {
                 agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
             }),
+            multi_agent_task_payload: MultiAgentTaskPayload::Encrypted,
             agent_identity_policy,
             prompt_cache_key_override: None,
             codex_responses_headers: None,
@@ -530,6 +533,14 @@ impl ModelClient {
 
     pub(crate) fn reasoning_effort_override_enabled(&self) -> bool {
         self.state.reasoning_effort_override_enabled
+    }
+
+    pub(crate) fn with_multi_agent_task_payload(
+        mut self,
+        multi_agent_task_payload: MultiAgentTaskPayload,
+    ) -> Self {
+        self.multi_agent_task_payload = multi_agent_task_payload;
+        self
     }
 
     pub(crate) fn with_restored_history(mut self, restored_history: bool) -> Self {
@@ -867,6 +878,11 @@ impl ModelClient {
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<ResponsesApiRequest> {
         let mut input = prompt.get_formatted_input_for_request(model_info);
+        crate::inter_agent_request_projection::project_inter_agent_communications(
+            &mut input,
+            self.state.provider.info().agent_message_representation(),
+            self.multi_agent_task_payload,
+        )?;
         if !self.state.reasoning_effort_override_enabled {
             // Disabling overrides must also recover threads with saved updates.
             // Filter only the request copy; persisted history remains unchanged.

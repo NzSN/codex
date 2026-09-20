@@ -333,7 +333,9 @@ async fn multi_agent_v2_tools_emit_collaborator_analytics() -> Result<()> {
 
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri())
+        .with_provider_name("OpenAI")
         .enable_feature(Feature::MultiAgentV2)
+        .disable_feature(Feature::EnableRequestCompression)
         .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
         .write(codex_home.path())?;
     mount_analytics_capture(&server, codex_home.path()).await?;

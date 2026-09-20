@@ -11729,6 +11729,7 @@ async fn multi_agent_v2_config_from_feature_table() -> std::io::Result<()> {
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"[features.multi_agent_v2]
 enabled = true
+task_payload = "plaintext"
 max_concurrent_threads_per_session = 5
 min_wait_timeout_ms = 2500
 max_wait_timeout_ms = 120000
@@ -11756,6 +11757,11 @@ max_concurrent_threads_per_session = 9
         .await?;
 
     assert!(config.features.enabled(Feature::MultiAgentV2));
+    assert_eq!(
+        config.multi_agent_v2.task_payload,
+        codex_protocol::protocol::MultiAgentTaskPayload::Plaintext
+    );
+    assert!(config.multi_agent_v2.task_payload_locked);
     assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 5);
     assert_eq!(config.multi_agent_v2.min_wait_timeout_ms, 2500);
     assert_eq!(config.multi_agent_v2.max_wait_timeout_ms, 120000);
@@ -11822,6 +11828,11 @@ enabled = true
         config.multi_agent_v2,
         resolve_multi_agent_v2_config(&ConfigToml::default())
     );
+    assert_eq!(
+        config.multi_agent_v2.task_payload,
+        codex_protocol::protocol::MultiAgentTaskPayload::Encrypted
+    );
+    assert!(!config.multi_agent_v2.task_payload_locked);
     assert_eq!(
         (
             config.agent_max_threads,

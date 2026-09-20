@@ -2619,6 +2619,7 @@ mod tests {
                 history_base: None,
                 subagent_history_start_ordinal: None,
                 multi_agent_version: None,
+                multi_agent_task_payload: Default::default(),
                 context_window: None,
             },
             git: None,
@@ -2691,6 +2692,7 @@ mod tests {
                 history_base: None,
                 subagent_history_start_ordinal: None,
                 multi_agent_version: None,
+                multi_agent_task_payload: Default::default(),
                 context_window: None,
             },
             git: Some(GitInfo {

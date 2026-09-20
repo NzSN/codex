@@ -27,6 +27,8 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ToolMode;
+use codex_protocol::protocol::MultiAgentTaskPayload;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
@@ -42,6 +44,24 @@ use super::ToolCallSource;
 use super::ToolRouter;
 use super::tool_log_payload;
 
+fn router_with_collaboration_message_tool(
+    tool_name: ToolName,
+    task_payload: MultiAgentTaskPayload,
+) -> ToolRouter {
+    ToolRouter::from_parts(
+        crate::tools::registry::ToolRegistry::empty_for_test(),
+        Vec::new(),
+        ToolMode::Direct,
+        BTreeMap::new(),
+        /*tool_namespaces_info*/ None,
+        &[],
+        super::CollaborationMessagePolicy {
+            tools: &[tool_name],
+            task_payload,
+        },
+    )
+}
+
 struct ExtensionEchoContributor;
 
 #[test]
@@ -56,6 +76,175 @@ fn tool_log_payload_redacts_plaintext_multi_agent_messages() {
     assert_eq!(
         tool_log_payload(&payload, &ToolCallSource::Direct),
         payload.log_payload()
+    );
+}
+
+#[test]
+fn plaintext_collaboration_accepts_absent_and_empty_encryption_metadata() {
+    let tool_name = ToolName::namespaced("agents", "send_message");
+    let router =
+        router_with_collaboration_message_tool(tool_name.clone(), MultiAgentTaskPayload::Plaintext);
+    for encrypted_function_args in [None, Some(Vec::new())] {
+        let call = ToolCall {
+            tool_name: tool_name.clone(),
+            call_id: "call".to_string(),
+            payload: ToolPayload::Function {
+                arguments: json!({"target": "/root/worker", "message": "secret"}).to_string(),
+            },
+            encrypted_function_args,
+        };
+        assert_eq!(
+            router
+                .normalize_call_source(&call, ToolCallSource::Direct)
+                .expect("plaintext metadata should be accepted"),
+            ToolCallSource::DirectPlaintextMessage
+        );
+        assert_eq!(
+            tool_log_payload(&call.payload, &router.source_for_logging(&call)),
+            "[plaintext arguments]"
+        );
+    }
+}
+
+#[test]
+fn plaintext_collaboration_rejects_explicit_message_encryption() {
+    let tool_name = ToolName::namespaced("agents", "spawn_agent");
+    let router =
+        router_with_collaboration_message_tool(tool_name.clone(), MultiAgentTaskPayload::Plaintext);
+    let call = ToolCall {
+        tool_name,
+        call_id: "call".to_string(),
+        payload: ToolPayload::Function {
+            arguments: json!({"task_name": "worker", "message": "opaque"}).to_string(),
+        },
+        encrypted_function_args: Some(vec!["message".to_string()]),
+    };
+
+    let error = router
+        .normalize_call_source(&call, ToolCallSource::Direct)
+        .expect_err("explicit encryption should be rejected");
+    assert_eq!(
+        error.to_string(),
+        "collaboration message was explicitly encrypted, but plaintext task payload mode requires readable message arguments"
+    );
+    assert_eq!(
+        tool_log_payload(&call.payload, &router.source_for_logging(&call)),
+        "[plaintext arguments]"
+    );
+}
+
+#[test]
+fn encrypted_collaboration_preserves_legacy_metadata_classification() {
+    let tool_name = ToolName::namespaced("collaboration", "followup_task");
+    let router =
+        router_with_collaboration_message_tool(tool_name.clone(), MultiAgentTaskPayload::Encrypted);
+    let call = |encrypted_function_args| ToolCall {
+        tool_name: tool_name.clone(),
+        call_id: "call".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+        encrypted_function_args,
+    };
+
+    assert_eq!(
+        router
+            .normalize_call_source(&call(None), ToolCallSource::Direct)
+            .expect("absent legacy metadata should be accepted"),
+        ToolCallSource::Direct
+    );
+    assert_eq!(
+        router
+            .normalize_call_source(&call(Some(Vec::new())), ToolCallSource::Direct)
+            .expect("empty legacy metadata should be accepted"),
+        ToolCallSource::DirectPlaintextMessage
+    );
+}
+
+#[test]
+fn plaintext_collaboration_preserves_code_mode_origin() {
+    let tool_name = ToolName::namespaced("agents", "send_message");
+    let router =
+        router_with_collaboration_message_tool(tool_name.clone(), MultiAgentTaskPayload::Plaintext);
+    let call = ToolCall {
+        tool_name,
+        call_id: "call".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+        encrypted_function_args: None,
+    };
+
+    assert_eq!(
+        router
+            .normalize_call_source(
+                &call,
+                ToolCallSource::CodeMode {
+                    cell_id: "cell".to_string(),
+                    runtime_tool_call_id: "runtime-call".to_string(),
+                },
+            )
+            .expect("code-mode plaintext should be accepted"),
+        ToolCallSource::CodeModePlaintextMessage {
+            cell_id: "cell".to_string(),
+            runtime_tool_call_id: "runtime-call".to_string(),
+        }
+    );
+}
+
+#[test]
+fn plaintext_mode_redacts_outer_code_mode_wrapper_without_changing_payload() {
+    let router = |task_payload| {
+        ToolRouter::from_parts(
+            crate::tools::registry::ToolRegistry::empty_for_test(),
+            Vec::new(),
+            ToolMode::CodeModeOnly,
+            BTreeMap::new(),
+            /*tool_namespaces_info*/ None,
+            &[],
+            super::CollaborationMessagePolicy {
+                tools: &[],
+                task_payload,
+            },
+        )
+    };
+    let sentinel = "await tools.collaboration_plaintext.send_message({message: 'secret-task'})";
+    let call = ToolCall {
+        tool_name: ToolName::namespaced(
+            DEFAULT_FUNCTION_NAMESPACE,
+            codex_code_mode::PUBLIC_TOOL_NAME,
+        ),
+        call_id: "call".to_string(),
+        payload: ToolPayload::Custom {
+            input: sentinel.to_string(),
+        },
+        encrypted_function_args: None,
+    };
+
+    let plaintext_router = router(MultiAgentTaskPayload::Plaintext);
+    assert_eq!(
+        plaintext_router.source_for_logging(&call),
+        ToolCallSource::DirectPlaintextMessage
+    );
+    assert_eq!(
+        tool_log_payload(&call.payload, &plaintext_router.source_for_logging(&call)),
+        "[plaintext arguments]"
+    );
+    assert_eq!(
+        call.payload,
+        ToolPayload::Custom {
+            input: sentinel.to_string()
+        }
+    );
+
+    let encrypted_router = router(MultiAgentTaskPayload::Encrypted);
+    assert_eq!(
+        encrypted_router.source_for_logging(&call),
+        ToolCallSource::Direct
+    );
+    assert_eq!(
+        tool_log_payload(&call.payload, &ToolCallSource::Direct),
+        sentinel
     );
 }
 

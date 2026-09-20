@@ -3080,6 +3080,29 @@ pub enum MultiAgentVersion {
     V2,
 }
 
+/// Encoding requested for model-authored multi-agent task content.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum MultiAgentTaskPayload {
+    #[default]
+    Encrypted,
+    Plaintext,
+}
+
+fn is_encrypted_multi_agent_task_payload(task_payload: &MultiAgentTaskPayload) -> bool {
+    matches!(task_payload, MultiAgentTaskPayload::Encrypted)
+}
+
+impl fmt::Display for MultiAgentTaskPayload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Encrypted => f.write_str("encrypted"),
+            Self::Plaintext => f.write_str("plaintext"),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 pub struct SessionContextWindow {
     /// UUIDv7 identity of this context window.
@@ -3180,6 +3203,9 @@ pub struct SessionMeta {
     pub subagent_history_start_ordinal: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub multi_agent_version: Option<MultiAgentVersion>,
+    /// Fixed encoding mode for model-authored tasks in this thread's multi-agent tree.
+    #[serde(default, skip_serializing_if = "is_encrypted_multi_agent_task_payload")]
+    pub multi_agent_task_payload: MultiAgentTaskPayload,
     /// Initial context-window identity for consumers that tail rollout JSONL before compaction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<SessionContextWindow>,
@@ -3213,6 +3239,7 @@ impl Default for SessionMeta {
             history_base: None,
             subagent_history_start_ordinal: None,
             multi_agent_version: None,
+            multi_agent_task_payload: MultiAgentTaskPayload::default(),
             context_window: None,
         }
     }
@@ -6130,7 +6157,7 @@ mod tests {
 
     #[test]
     fn session_meta_defaults_legacy_history_mode() -> Result<()> {
-        let session_meta: SessionMeta = serde_json::from_value(json!({
+        let mut session_meta: SessionMeta = serde_json::from_value(json!({
             "session_id": "00000000-0000-0000-0000-000000000001",
             "id": "00000000-0000-0000-0000-000000000001",
             "timestamp": "2026-01-01T00:00:00Z",
@@ -6142,11 +6169,28 @@ mod tests {
         }))?;
 
         assert_eq!(session_meta.history_mode, ThreadHistoryMode::Legacy);
+        assert_eq!(
+            session_meta.multi_agent_task_payload,
+            MultiAgentTaskPayload::Encrypted
+        );
         assert_eq!(session_meta.history_base, None);
         assert_eq!(session_meta.forked_from_ordinal_exclusive, None);
         let serialized = serde_json::to_value(&session_meta)?;
         assert!(serialized.get("forked_from_ordinal_exclusive").is_none());
+        assert!(serialized.get("multi_agent_task_payload").is_none());
         assert_eq!(serialized["history_mode"], json!("legacy"));
+        assert!(SessionMeta::decl().contains("multi_agent_task_payload?: MultiAgentTaskPayload"));
+        let schema = serde_json::to_value(schemars::schema_for!(SessionMeta))?;
+        assert!(
+            !schema["required"]
+                .as_array()
+                .is_some_and(|required| { required.contains(&json!("multi_agent_task_payload")) })
+        );
+        session_meta.multi_agent_task_payload = MultiAgentTaskPayload::Plaintext;
+        assert_eq!(
+            serde_json::to_value(&session_meta)?["multi_agent_task_payload"],
+            json!("plaintext")
+        );
         let mut unknown = serialized;
         unknown["history_mode"] = json!("future");
         assert!(serde_json::from_value::<SessionMeta>(unknown).is_err());

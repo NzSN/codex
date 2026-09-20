@@ -1,0 +1,116 @@
+{
+  "date": "2026-09-18",
+  "base_commit": "9acb2d624c1d9070f787749d82b3fd598f7a61cb",
+  "source_contract": [
+    {
+      "model": "gpt-6-astra",
+      "encrypted_schema_marker": false,
+      "endpoint": "https://chatgpt.com/backend-api/codex/responses",
+      "http_status": 400,
+      "error_message": "Invalid Value: 'tools'. Function 'collaboration.spawn_agent' is reserved for use by this model and must match the configured schema."
+    },
+    {
+      "model": "gpt-6-astra",
+      "encrypted_schema_marker": true,
+      "endpoint": "https://chatgpt.com/backend-api/codex/responses",
+      "http_status": 200,
+      "tool_name": "spawn_agent",
+      "namespace": "collaboration",
+      "message_matches_plaintext": false,
+      "encrypted_function_args": null,
+      "message_length": 164
+    }
+  ],
+  "alternate_namespace_contract": [
+    {
+      "model": "gpt-6-astra",
+      "encrypted_schema_marker": false,
+      "endpoint": "https://chatgpt.com/backend-api/codex/responses",
+      "http_status": 200,
+      "tool_name": "spawn_agent",
+      "namespace": "collaboration_plaintext",
+      "message_matches_plaintext": true,
+      "encrypted_function_args": null,
+      "message_length": 23
+    }
+  ],
+  "deepseek_responses_contract": {
+    "provider": "deepseek",
+    "base_url": "https://api.deepseek.com",
+    "steps": [
+      {
+        "expected": "PONG",
+        "matches": true,
+        "output_text": "PONG",
+        "status": "completed"
+      },
+      {
+        "expected": "PONG2",
+        "matches": true,
+        "output_text": "PONG2",
+        "status": "completed"
+      }
+    ],
+    "available_models": [
+      "deepseek-flash",
+      "deepseek-v4-pro"
+    ],
+    "model": "deepseek-flash"
+  },
+  "patched_cli": {
+    "exit_code": 0,
+    "final": "QUALIFIED",
+    "parent_provider": "openai",
+    "child_provider": "deepseek",
+    "both_persisted_mode": "plaintext",
+    "parent_tool_calls": [
+      {
+        "namespace": "collaboration_plaintext",
+        "name": "spawn_agent"
+      },
+      {
+        "namespace": "collaboration_plaintext",
+        "name": "wait_agent"
+      },
+      {
+        "namespace": "collaboration_plaintext",
+        "name": "send_message"
+      },
+      {
+        "namespace": "collaboration_plaintext",
+        "name": "followup_task"
+      },
+      {
+        "namespace": "collaboration_plaintext",
+        "name": "wait_agent"
+      }
+    ],
+    "child_replies": [
+      "PONG",
+      "PONG2"
+    ],
+    "child_started_turns": 2,
+    "child_plaintext_agent_items": 3,
+    "parent_plaintext_completion_items": 2
+  },
+  "cold_resume": {
+    "mode_setting_omitted": true,
+    "exit_code": 0,
+    "final": "RESUMED",
+    "same_child_reply": "PONG3",
+    "total_child_turns_after_resume": 3,
+    "startup_errors": []
+  },
+  "conflicting_resume": {
+    "explicit_override": "encrypted",
+    "exit_code": 1,
+    "model_task_started": false,
+    "error_category": "persisted task payload mode conflict"
+  },
+  "scope": "Synthetic task bodies only. No credentials, raw ciphertext, or account identifiers retained.",
+  "qualification_binaries": {
+    "codex_sha256": "478208b56c1bc57bf55b5f4d423109bcde5b0ab0a7e6689238e374ddf307376d",
+    "code_mode_host_sha256": "ffcc36234acd114efbdaf985dfef8eb450c2ee4c4ae7d228d819d8baf72eb04a",
+    "scope": "Live qualification snapshot preceded final completion-envelope admission hardening and Clippy cleanup; final source was covered by remote regression and compile checks."
+  }
+}

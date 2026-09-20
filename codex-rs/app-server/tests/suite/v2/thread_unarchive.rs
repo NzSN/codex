@@ -258,6 +258,7 @@ async fn thread_unarchive_preserves_pathless_store_metadata() -> Result<()> {
             dynamic_tools: Vec::new(),
             selected_capability_roots: Vec::new(),
             multi_agent_version: None,
+            multi_agent_task_payload: Default::default(),
             history_mode: Default::default(),
             history_base: None,
             subagent_history_start_ordinal: None,

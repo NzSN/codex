@@ -2519,6 +2519,14 @@
       },
       "type": "object"
     },
+    "MultiAgentTaskPayload": {
+      "description": "Encoding requested for model-authored multi-agent task content.",
+      "enum": [
+        "encrypted",
+        "plaintext"
+      ],
+      "type": "string"
+    },
     "MultiAgentV2ConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -2570,6 +2578,9 @@
         },
         "subagent_usage_hint_text": {
           "type": "string"
+        },
+        "task_payload": {
+          "$ref": "#/definitions/MultiAgentTaskPayload"
         },
         "tool_namespace": {
           "maxLength": 64,

@@ -142,6 +142,8 @@ mod pending_input;
 mod pending_input_persistence;
 mod permissions_messages;
 mod personality;
+mod plaintext_collaboration;
+mod plaintext_collaboration_scheduling;
 mod plugins;
 mod prompt_cache_key;
 mod prompt_caching;

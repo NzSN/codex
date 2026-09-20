@@ -338,7 +338,10 @@ impl ExecutedToolCalls {
         call_id: &str,
         result: &dyn ToolOutput,
     ) {
-        if !matches!(source, ToolCallSource::CodeMode { .. }) {
+        if !matches!(
+            source,
+            ToolCallSource::CodeMode { .. } | ToolCallSource::CodeModePlaintextMessage { .. }
+        ) {
             return;
         }
         // Release the lock before calling the output's trait method.
@@ -369,7 +372,8 @@ impl ExecutedToolCalls {
                     state.pending_wrapper_origins.insert(call.call_id.clone());
                 }
             }
-            ToolCallSource::CodeMode { cell_id, .. } => {
+            ToolCallSource::CodeMode { cell_id, .. }
+            | ToolCallSource::CodeModePlaintextMessage { cell_id, .. } => {
                 let (recorded_call, original_bytes) = recorded_call(call);
                 self.record_nested_tool_call(
                     CellId::new(cell_id.clone()),
@@ -441,7 +445,9 @@ impl ExecutedToolCalls {
         call_id: &str,
         metadata: &JsonValue,
     ) -> bool {
-        let ToolCallSource::CodeMode { cell_id, .. } = source else {
+        let (ToolCallSource::CodeMode { cell_id, .. }
+        | ToolCallSource::CodeModePlaintextMessage { cell_id, .. }) = source
+        else {
             return false;
         };
         let metadata = codex_protocol::models::ToolResultMetadata::new(metadata);
@@ -530,8 +536,10 @@ impl ExecutedToolCalls {
 }
 
 fn is_code_mode_wrapper(call: &ToolCall, source: &ToolCallSource, tool_mode: ToolMode) -> bool {
-    matches!(source, ToolCallSource::Direct)
-        && matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
+    matches!(
+        source,
+        ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage
+    ) && matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
         && call.tool_name.is_default_namespace()
         && matches!(
             (call.tool_name.name.as_str(), &call.payload),

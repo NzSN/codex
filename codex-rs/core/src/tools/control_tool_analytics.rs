@@ -39,7 +39,10 @@ impl Drop for ControlToolCallGuard<'_> {
                 turn_metadata: invocation.turn.turn_metadata_state.clone(),
                 call_id: invocation.call_id.clone(),
                 cell_id: match &invocation.source {
-                    ToolCallSource::CodeMode { cell_id, .. } => Some(cell_id.clone()),
+                    ToolCallSource::CodeMode { cell_id, .. }
+                    | ToolCallSource::CodeModePlaintextMessage { cell_id, .. } => {
+                        Some(cell_id.clone())
+                    }
                     ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage => None,
                 },
                 tool_name: match invocation.tool_name.namespace.as_deref() {

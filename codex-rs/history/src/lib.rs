@@ -18,6 +18,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::MultiAgentTaskPayload;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
@@ -398,6 +399,12 @@ impl InitialHistory {
             }
             Self::Forked(items) => multi_agent_version_from_items(items, /*thread_id*/ None),
         }
+    }
+
+    pub fn get_multi_agent_task_payload(&self) -> MultiAgentTaskPayload {
+        self.get_session_meta()
+            .map(|meta| meta.multi_agent_task_payload)
+            .unwrap_or_default()
     }
 
     pub fn get_history_mode(&self, default_history_mode: ThreadHistoryMode) -> ThreadHistoryMode {

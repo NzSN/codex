@@ -4597,8 +4597,10 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected(
     .await;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri())
+        .with_provider_name("OpenAI")
         .enable_feature(Feature::MultiAgentV2)
         .enable_feature(Feature::Goals)
+        .disable_feature(Feature::EnableRequestCompression)
         .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
         .write(codex_home.path())?;
     write_models_cache(codex_home.path()).await?;

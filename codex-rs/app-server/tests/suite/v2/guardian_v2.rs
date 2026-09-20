@@ -887,8 +887,10 @@ async fn guardian_v2_routes_scoped_tool_approvals(
     }
     if lifecycle.uses_root_worker() {
         mock_config = mock_config
+            .with_provider_name("OpenAI")
             .enable_feature(Feature::Collab)
-            .enable_feature(Feature::MultiAgentV2);
+            .enable_feature(Feature::MultiAgentV2)
+            .disable_feature(Feature::EnableRequestCompression);
     }
     if matches!(lifecycle, ThreadLifecycle::RootUserInputCompaction) {
         mock_config = mock_config

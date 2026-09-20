@@ -25,6 +25,7 @@ use crate::config::resolve_tool_suggest_config_from_layer_stack;
 use crate::context::ContextualUserFragment;
 use crate::context::DeveloperInstructions;
 use crate::context::GuardianPolicy;
+use crate::context::InterAgentAuthorityInstructions;
 use crate::context::ManagedDeveloperInstructions;
 use crate::context::ModelSwitchInstructions;
 use crate::context::MultiAgentRoleInstructions;
@@ -47,7 +48,7 @@ use crate::session::step_context::StepContext;
 use crate::session::step_settings::ResolvedStepSettings;
 use crate::session::step_settings::StepSettings;
 use crate::session::turn_context::TurnEnvironment;
-use crate::session_prefix::format_inter_agent_completion_message;
+use crate::session_prefix::format_inter_agent_completion_message_for_delivery;
 use crate::shell_snapshot::SnapshotCredentialBrokerState;
 use crate::skills_load_input_from_config;
 use crate::stream_events_utils::mark_thread_memory_mode_polluted_if_external_context;
@@ -2484,10 +2485,20 @@ impl Session {
             }
         }
 
-        let Some(message) = format_inter_agent_completion_message(
+        let Ok((task_payload, representation)) = self
+            .services
+            .agent_control
+            .agent_delivery_policy(parent_thread_id)
+            .await
+        else {
+            return;
+        };
+        let Some(message) = format_inter_agent_completion_message_for_delivery(
             parent_agent_path.clone(),
             child_agent_path.clone(),
             &status,
+            task_payload,
+            representation,
         ) else {
             return;
         };
@@ -4206,6 +4217,15 @@ impl Session {
         {
             developer_sections
                 .push(DeveloperInstructions::new(developer_instructions).render_fragment());
+        }
+        if turn_context.multi_agent_version == MultiAgentVersion::V2
+            && turn_context
+                .config
+                .model_provider
+                .agent_message_representation()
+                == codex_model_provider_info::AgentMessageRepresentation::UserMessage
+        {
+            developer_sections.push(InterAgentAuthorityInstructions.render_fragment());
         }
         let loaded_plugins = self
             .services

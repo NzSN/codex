@@ -79,13 +79,26 @@ impl ToolCallRuntime {
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<ResponseItemEnvelope, CodexErr>> {
         let error_call = call.clone();
-        let source = call.direct_source();
+        let source = match self
+            .step_context
+            .tool_router
+            .normalize_call_source(&call, call.direct_source())
+        {
+            Ok(source) => source,
+            Err(error) => {
+                return Either::Left(async move {
+                    Ok(ResponseItemEnvelope::new(
+                        Self::failure_response(error_call, error).into(),
+                    ))
+                });
+            }
+        };
         let recorder = self.session.services.executed_tool_calls.clone();
         let recorded_call = recorder.prepare_direct_call(&call, &source, &self.step_context);
         let step_context = Arc::clone(&self.step_context);
         let future =
             self.handle_tool_call_with_source(step_context, call, source, cancellation_token);
-        async move {
+        Either::Right(async move {
             let result = future.await;
             let mut recorded_call =
                 recorded_call.filter(|(_, recording)| recording.strong_count() > 0);
@@ -105,7 +118,7 @@ impl ToolCallRuntime {
             };
             recorder.attach_direct_call_to_output(&mut response.item, recorded_call);
             Ok(response)
-        }
+        })
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -152,7 +165,9 @@ impl ToolCallRuntime {
             ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage => {
                 call_trace::Source::Direct
             }
-            ToolCallSource::CodeMode { .. } => call_trace::Source::CodeMode,
+            ToolCallSource::CodeMode { .. } | ToolCallSource::CodeModePlaintextMessage { .. } => {
+                call_trace::Source::CodeMode
+            }
         };
         let dispatch_tool_name = call.tool_name.clone();
         let dispatch_call_id = call.call_id.clone();
@@ -534,6 +549,10 @@ mod tests {
             BTreeMap::new(),
             /*tool_namespaces_info*/ None,
             &[],
+            crate::tools::router::CollaborationMessagePolicy {
+                tools: &[],
+                task_payload: codex_protocol::protocol::MultiAgentTaskPayload::Encrypted,
+            },
         ));
         let step_context = step_context.with_tool_router_for_test(router);
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
@@ -723,6 +742,10 @@ mod tests {
             BTreeMap::new(),
             /*tool_namespaces_info*/ None,
             &[],
+            crate::tools::router::CollaborationMessagePolicy {
+                tools: &[],
+                task_payload: codex_protocol::protocol::MultiAgentTaskPayload::Encrypted,
+            },
         ));
         let step_context = step_context.with_tool_router_for_test(router);
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));

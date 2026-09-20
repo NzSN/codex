@@ -140,6 +140,10 @@ pub(crate) fn extension_tool_call_source(source: ToolCallSource) -> ExtensionToo
         ToolCallSource::CodeMode {
             cell_id,
             runtime_tool_call_id,
+        }
+        | ToolCallSource::CodeModePlaintextMessage {
+            cell_id,
+            runtime_tool_call_id,
         } => ExtensionToolCallSource::CodeMode {
             cell_id,
             runtime_tool_call_id,

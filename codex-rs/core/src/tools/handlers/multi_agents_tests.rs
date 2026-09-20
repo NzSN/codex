@@ -17,7 +17,7 @@ use crate::session::tests::make_session_and_context;
 use crate::session::tests::update_selected_settings_for_test;
 use crate::session::tests::update_turn_settings_for_test;
 use crate::session::turn_context::TurnContext;
-use crate::session_prefix::format_inter_agent_completion_message;
+use crate::session_prefix::format_inter_agent_completion_message_for_delivery;
 use crate::thread_manager::thread_store_from_config;
 use crate::tools::context::ToolOutput;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
@@ -34,6 +34,7 @@ use codex_history::RolloutItem;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
+use codex_model_provider_info::AgentMessageRepresentation;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::AgentPath;
@@ -62,6 +63,8 @@ use codex_protocol::protocol::FileSystemSandboxEntry;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::MultiAgentTaskPayload;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
@@ -83,6 +86,9 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
+
+#[path = "multi_agents_provider_delivery_tests.rs"]
+mod provider_delivery_tests;
 
 fn invocation(
     session: Arc<crate::session::session::Session>,
@@ -143,6 +149,18 @@ fn thread_manager() -> ThreadManager {
 }
 
 async fn install_role_with_model_override(turn: &mut TurnContext) -> String {
+    install_role_with_model_and_provider_override(turn, "ollama").await
+}
+
+async fn install_same_provider_role_with_model_override(turn: &mut TurnContext) -> String {
+    let model_provider_id = turn.config.model_provider_id.clone();
+    install_role_with_model_and_provider_override(turn, &model_provider_id).await
+}
+
+async fn install_role_with_model_and_provider_override(
+    turn: &mut TurnContext,
+    model_provider_id: &str,
+) -> String {
     let role_name = "fork-context-role".to_string();
     tokio::fs::create_dir_all(&turn.config.codex_home)
         .await
@@ -154,10 +172,12 @@ async fn install_role_with_model_override(turn: &mut TurnContext) -> String {
         .join("fork-context-role.toml");
     tokio::fs::write(
         &role_config_path,
-        r#"model = "gpt-5-role-override"
-model_provider = "ollama"
+        format!(
+            r#"model = "gpt-5-role-override"
+model_provider = "{model_provider_id}"
 model_reasoning_effort = "minimal"
-"#,
+"#
+        ),
     )
     .await
     .expect("role config should be written");
@@ -380,7 +400,7 @@ async fn spawn_agent_fork_context_rejects_agent_type_override() {
 #[tokio::test]
 async fn multi_agent_v2_spawn_fork_turns_all_applies_agent_type_override() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let role_name = install_role_with_model_override(&mut turn).await;
+    let role_name = install_same_provider_role_with_model_override(&mut turn).await;
     let manager = thread_manager();
     let root = manager
         .start_thread(StartThreadOptions::new((*turn.config).clone()))
@@ -808,7 +828,8 @@ async fn multi_agent_v2_full_history_fork_inherits_root_service_tier() {
 #[tokio::test]
 async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let role_name = install_role_with_model_override(&mut turn).await;
+    let role_name = install_same_provider_role_with_model_override(&mut turn).await;
+    let expected_model_provider_id = turn.config.model_provider_id.clone();
     let manager = thread_manager();
     let root = manager
         .start_thread(StartThreadOptions::new((*turn.config).clone()))
@@ -857,7 +878,7 @@ async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
         .await;
 
     assert_eq!(snapshot.model, "gpt-5-role-override");
-    assert_eq!(snapshot.model_provider_id, "ollama");
+    assert_eq!(snapshot.model_provider_id, expected_model_provider_id);
     assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Minimal));
 }
 
@@ -1888,16 +1909,20 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         )
         .await;
 
-    let first_notification = format_inter_agent_completion_message(
+    let first_notification = format_inter_agent_completion_message_for_delivery(
         AgentPath::root(),
         worker_path.clone(),
         &AgentStatus::Completed(Some("first done".to_string())),
+        MultiAgentTaskPayload::Encrypted,
+        AgentMessageRepresentation::Native,
     )
     .expect("completed status should render");
-    let second_notification = format_inter_agent_completion_message(
+    let second_notification = format_inter_agent_completion_message_for_delivery(
         AgentPath::root(),
         worker_path.clone(),
         &AgentStatus::Completed(Some("second done".to_string())),
+        MultiAgentTaskPayload::Encrypted,
+        AgentMessageRepresentation::Native,
     )
     .expect("completed status should render");
 
@@ -4578,6 +4603,9 @@ async fn build_agent_resume_config_clears_base_instructions() {
     let config = build_agent_resume_config(&turn).expect("resume config");
 
     let mut expected = (*turn.config).clone();
+    if turn.multi_agent_version == MultiAgentVersion::V2 {
+        expected.multi_agent_v2.task_payload_locked = true;
+    }
     expected.base_instructions = None;
     expected.base_instructions_provenance = None;
     expected.model = Some(turn.model_info().slug.clone());

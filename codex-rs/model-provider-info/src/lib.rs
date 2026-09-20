@@ -70,6 +70,15 @@ const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 const OPENAI_ACTOR_AUTHORIZATION_HEADER: &str = "x-openai-actor-authorization";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
+
+/// Wire representation used for model-visible communication between agents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentMessageRepresentation {
+    /// Send the Responses API `agent_message` item unchanged.
+    Native,
+    /// Project attributed plaintext into an ordinary user input message.
+    UserMessage,
+}
 pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
@@ -253,6 +262,15 @@ fn default_aws_auth_refresh_timeout_ms() -> NonZeroU64 {
 }
 
 impl ModelProviderInfo {
+    /// Returns the provider's supported representation for inter-agent input.
+    pub fn agent_message_representation(&self) -> AgentMessageRepresentation {
+        if self.is_openai() {
+            AgentMessageRepresentation::Native
+        } else {
+            AgentMessageRepresentation::UserMessage
+        }
+    }
+
     /// Checks that a configured Bedrock entry only customizes supported fields.
     /// Call this on the override before merging it with the built-in provider.
     pub fn validate_bedrock_override(&self) -> Result<(), String> {

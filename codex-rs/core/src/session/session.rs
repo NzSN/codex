@@ -1003,6 +1003,7 @@ impl Session {
                             dynamic_tools: session_configuration.dynamic_tools.clone(),
                             selected_capability_roots: selected_capability_roots.clone(),
                             multi_agent_version: initial_multi_agent_version,
+                            multi_agent_task_payload: config.multi_agent_v2.task_payload,
                             history_mode: session_configuration.history_mode,
                             history_base: match &fork_persistence {
                                 ForkPersistence::Copied => None,
@@ -1692,6 +1693,7 @@ impl Session {
                     config.http_client_factory(),
                     config.workspace_routing_context(),
                 )
+                .with_multi_agent_task_payload(config.multi_agent_v2.task_payload)
                 .with_restored_history(matches!(
                     &initial_history,
                     InitialHistory::Resumed(_) | InitialHistory::Forked(_)

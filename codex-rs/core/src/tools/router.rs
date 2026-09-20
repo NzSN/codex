@@ -20,12 +20,14 @@ use codex_protocol::models::SearchToolCallParams;
 #[cfg(test)]
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ToolMode;
+use codex_protocol::protocol::MultiAgentTaskPayload;
 use codex_tools::DiscoverableTool;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
@@ -43,20 +45,7 @@ pub struct ToolCall {
 
 impl ToolCall {
     pub(crate) fn direct_source(&self) -> ToolCallSource {
-        if self.tool_name.namespace.as_deref() == Some("collaboration")
-            && matches!(
-                self.tool_name.name.as_str(),
-                "spawn_agent" | "send_message" | "followup_task"
-            )
-            && self
-                .encrypted_function_args
-                .as_ref()
-                .is_some_and(Vec::is_empty)
-        {
-            ToolCallSource::DirectPlaintextMessage
-        } else {
-            ToolCallSource::Direct
-        }
+        ToolCallSource::Direct
     }
 }
 
@@ -64,7 +53,7 @@ pub(crate) fn tool_log_payload<'a>(
     payload: &'a ToolPayload,
     source: &ToolCallSource,
 ) -> Cow<'a, str> {
-    if matches!(source, ToolCallSource::DirectPlaintextMessage) {
+    if source.is_plaintext_message() {
         return Cow::Borrowed("[plaintext arguments]");
     }
     payload.log_payload()
@@ -78,6 +67,14 @@ pub struct ToolRouter {
     code_mode_tool_names: BTreeMap<String, ToolName>,
     tool_namespaces_info: Option<TurnToolNamespacesInfo>,
     can_manage_children: bool,
+    collaboration_message_tools: BTreeSet<ToolName>,
+    multi_agent_task_payload: MultiAgentTaskPayload,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CollaborationMessagePolicy<'a> {
+    pub(crate) tools: &'a [ToolName],
+    pub(crate) task_payload: MultiAgentTaskPayload,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +115,7 @@ impl ToolRouter {
         code_mode_tool_names: BTreeMap<String, ToolName>,
         tool_namespaces_info: Option<TurnToolNamespacesInfo>,
         child_management_tools: &[ToolName],
+        collaboration_message_policy: CollaborationMessagePolicy<'_>,
     ) -> Self {
         let mut router = Self {
             registry,
@@ -126,6 +124,13 @@ impl ToolRouter {
             code_mode_tool_names,
             tool_namespaces_info,
             can_manage_children: false,
+            collaboration_message_tools: collaboration_message_policy
+                .tools
+                .iter()
+                .cloned()
+                .map(ToolName::with_default_namespace)
+                .collect(),
+            multi_agent_task_payload: collaboration_message_policy.task_payload,
         };
         router.can_manage_children = !child_management_tools.is_empty()
             && child_management_tools
@@ -170,6 +175,62 @@ impl ToolRouter {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn can_manage_children(&self) -> bool {
         self.can_manage_children
+    }
+
+    pub(crate) fn normalize_call_source(
+        &self,
+        call: &ToolCall,
+        source: ToolCallSource,
+    ) -> Result<ToolCallSource, FunctionCallError> {
+        if self.multi_agent_task_payload == MultiAgentTaskPayload::Plaintext
+            && matches!(self.tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
+            && call.tool_name.is_default_namespace()
+            && call.tool_name.name == codex_code_mode::PUBLIC_TOOL_NAME
+            && matches!(&call.payload, ToolPayload::Custom { .. })
+            && matches!(
+                &source,
+                ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage
+            )
+        {
+            return Ok(source.into_plaintext_message());
+        }
+        if !self
+            .collaboration_message_tools
+            .contains(&call.tool_name.clone().with_default_namespace())
+        {
+            return Ok(source);
+        }
+        match self.multi_agent_task_payload {
+            MultiAgentTaskPayload::Plaintext => {
+                if call
+                    .encrypted_function_args
+                    .as_ref()
+                    .is_some_and(|arguments| arguments.iter().any(|argument| argument == "message"))
+                {
+                    return Err(FunctionCallError::RespondToModel(
+                        "collaboration message was explicitly encrypted, but plaintext task payload mode requires readable message arguments"
+                            .to_string(),
+                    ));
+                }
+                Ok(source.into_plaintext_message())
+            }
+            MultiAgentTaskPayload::Encrypted => {
+                if call
+                    .encrypted_function_args
+                    .as_ref()
+                    .is_some_and(Vec::is_empty)
+                {
+                    Ok(source.into_plaintext_message())
+                } else {
+                    Ok(source)
+                }
+            }
+        }
+    }
+
+    pub(crate) fn source_for_logging(&self, call: &ToolCall) -> ToolCallSource {
+        self.normalize_call_source(call, call.direct_source())
+            .unwrap_or(ToolCallSource::DirectPlaintextMessage)
     }
 
     // Answers if the tool plan lets the model invoke the tool directly, through code mode, or deferred tool search.

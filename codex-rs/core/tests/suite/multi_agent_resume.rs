@@ -143,6 +143,14 @@ fn configure_multi_agent_v2_with_role(
         .features
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
+    config.model_providers.insert(
+        ROLE_MODEL_PROVIDER_ID.to_string(),
+        config.model_provider.clone(),
+    );
+    config
+        .features
+        .disable(Feature::EnableRequestCompression)
+        .expect("keep mock requests uncompressed");
     config.multi_agent_v2.subagent_developer_instructions =
         Some(SUBAGENT_DEVELOPER_INSTRUCTIONS.to_string());
     config.multi_agent_v2.max_concurrent_threads_per_session = 3;
@@ -150,7 +158,7 @@ fn configure_multi_agent_v2_with_role(
     std::fs::write(
         &role_path,
         format!(
-            "model = \"{ROLE_MODEL}\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"{ROLE_DEVELOPER_INSTRUCTIONS}\"\nsandbox_mode = \"read-only\"\nmodel_provider = \"mock\"\n\n[model_providers.mock]\nname = \"mock\"\nbase_url = \"{model_provider_base_url}\"\nenv_key = \"PATH\"\nwire_api = \"responses\"\n"
+            "model = \"{ROLE_MODEL}\"\nmodel_reasoning_effort = \"high\"\ndeveloper_instructions = \"{ROLE_DEVELOPER_INSTRUCTIONS}\"\nsandbox_mode = \"read-only\"\nmodel_provider = \"{ROLE_MODEL_PROVIDER_ID}\"\n\n[model_providers.mock]\nname = \"mock\"\nbase_url = \"{model_provider_base_url}\"\nenv_key = \"PATH\"\nwire_api = \"responses\"\n"
         ),
     )
     .expect("write durable worker role config");

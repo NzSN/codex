@@ -54,11 +54,11 @@ pub(crate) async fn emit_sub_agent_activity(
 fn agent_message_from_tool(
     message: String,
     source: &crate::tools::context::ToolCallSource,
+    task_payload: codex_protocol::protocol::MultiAgentTaskPayload,
 ) -> AgentMessage {
-    if matches!(
-        source,
-        crate::tools::context::ToolCallSource::DirectPlaintextMessage
-    ) {
+    if task_payload == codex_protocol::protocol::MultiAgentTaskPayload::Plaintext
+        || source.is_plaintext_message()
+    {
         AgentMessage::Plaintext(message)
     } else {
         AgentMessage::Encrypted(message)

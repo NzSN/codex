@@ -17,6 +17,7 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
+use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -45,7 +46,9 @@ async fn fresh_context_subagent_inherits_disabled_view_image_and_mcp_tools() -> 
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&responses_server.uri())
         .with_model("gpt-5.4")
+        .with_provider_name("OpenAI")
         .with_provider_config("supports_websockets = false")
+        .disable_feature(Feature::EnableRequestCompression)
         .with_extra_config(&format!(
             "[mcp_servers.{TEST_SERVER_NAME}]\nurl = \"{mcp_server_url}/mcp\"\n\n[features.multi_agent_v2]\nenabled = true"
         ))

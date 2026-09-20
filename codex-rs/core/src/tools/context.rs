@@ -54,6 +54,38 @@ pub enum ToolCallSource {
         /// because the runtime id only needs to be unique within one cell.
         runtime_tool_call_id: String,
     },
+    CodeModePlaintextMessage {
+        /// Runtime cell that issued the nested tool request.
+        cell_id: String,
+        /// Code-mode's per-cell tool invocation id.
+        runtime_tool_call_id: String,
+    },
+}
+
+impl ToolCallSource {
+    pub(crate) fn is_plaintext_message(&self) -> bool {
+        matches!(
+            self,
+            Self::DirectPlaintextMessage | Self::CodeModePlaintextMessage { .. }
+        )
+    }
+
+    pub(crate) fn into_plaintext_message(self) -> Self {
+        match self {
+            Self::Direct | Self::DirectPlaintextMessage => Self::DirectPlaintextMessage,
+            Self::CodeMode {
+                cell_id,
+                runtime_tool_call_id,
+            }
+            | Self::CodeModePlaintextMessage {
+                cell_id,
+                runtime_tool_call_id,
+            } => Self::CodeModePlaintextMessage {
+                cell_id,
+                runtime_tool_call_id,
+            },
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -82,7 +114,9 @@ pub(crate) struct ToolCallOrigin {
 impl ToolInvocation {
     /// Returns the item and window that requested this call or started its code-mode cell.
     pub(crate) async fn originating_call(&self) -> Option<ToolCallOrigin> {
-        if let ToolCallSource::CodeMode { cell_id, .. } = &self.source {
+        if let ToolCallSource::CodeMode { cell_id, .. }
+        | ToolCallSource::CodeModePlaintextMessage { cell_id, .. } = &self.source
+        {
             return self
                 .session
                 .services

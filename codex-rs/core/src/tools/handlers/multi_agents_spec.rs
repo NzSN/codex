@@ -1,6 +1,7 @@
 use crate::agent::child_config::MAX_SPAWN_AGENT_MODEL_OVERRIDES;
 use crate::agent::child_config::model_supports_multi_agent_backend;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::protocol::MultiAgentTaskPayload;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiNamespace;
@@ -241,6 +242,27 @@ pub fn create_followup_task_tool() -> ToolSpec {
         parameters: JsonSchema::object(properties, Some(vec!["target".to_string(), "message".to_string()]), Some(false.into())),
         output_schema: None,
     })
+}
+
+pub(crate) fn apply_multi_agent_task_payload(
+    spec: &mut ToolSpec,
+    task_payload: MultiAgentTaskPayload,
+) {
+    if task_payload == MultiAgentTaskPayload::Encrypted {
+        return;
+    }
+    let ToolSpec::Function(tool) = spec else {
+        return;
+    };
+    let Some(message) = tool
+        .parameters
+        .properties
+        .as_mut()
+        .and_then(|properties| properties.get_mut("message"))
+    else {
+        return;
+    };
+    message.encrypted = None;
 }
 
 pub fn create_resume_agent_tool() -> ToolSpec {

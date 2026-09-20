@@ -1221,11 +1221,25 @@ async fn grandchild_full_fork_preserves_context_baseline(
         GrandchildParentContext::NoHistory => ("none", false),
         GrandchildParentContext::Compacted => ("all", true),
     };
+    let collaboration_namespace = if compact_parent {
+        "collaboration_plaintext"
+    } else {
+        MULTI_AGENT_V2_NAMESPACE
+    };
     let root_spawn_args = serde_json::to_string(&json!({
         "task_name": "child",
         "message": CHILD_TASK,
         "fork_turns": parent_fork_turns,
     }))?;
+    let mut root_spawn_event = ev_function_call_with_namespace(
+        ROOT_CALL,
+        collaboration_namespace,
+        "spawn_agent",
+        &root_spawn_args,
+    );
+    if compact_parent {
+        root_spawn_event["item"]["encrypted_function_args"] = json!([]);
+    }
     let root_log = mount_sse_once_match(
         &server,
         |req: &wiremock::Request| {
@@ -1236,12 +1250,7 @@ async fn grandchild_full_fork_preserves_context_baseline(
         },
         sse(vec![
             ev_response_created("baseline-root"),
-            ev_function_call_with_namespace(
-                ROOT_CALL,
-                MULTI_AGENT_V2_NAMESPACE,
-                "spawn_agent",
-                &root_spawn_args,
-            ),
+            root_spawn_event,
             ev_completed("baseline-root"),
         ]),
     )
@@ -1282,6 +1291,15 @@ async fn grandchild_full_fork_preserves_context_baseline(
         )
         .await;
     }
+    let mut child_spawn_event = ev_function_call_with_namespace(
+        CHILD_CALL,
+        collaboration_namespace,
+        "spawn_agent",
+        &child_spawn_args,
+    );
+    if compact_parent {
+        child_spawn_event["item"]["encrypted_function_args"] = json!([]);
+    }
     let child_log = mount_sse_once_match(
         &server,
         move |req: &wiremock::Request| {
@@ -1299,12 +1317,7 @@ async fn grandchild_full_fork_preserves_context_baseline(
         },
         sse(vec![
             ev_response_created("baseline-child"),
-            ev_function_call_with_namespace(
-                CHILD_CALL,
-                MULTI_AGENT_V2_NAMESPACE,
-                "spawn_agent",
-                &child_spawn_args,
-            ),
+            child_spawn_event,
             ev_completed("baseline-child"),
         ]),
     )
@@ -1350,6 +1363,8 @@ async fn grandchild_full_fork_preserves_context_baseline(
                 config.update_plan_enabled = true;
                 // Use local compaction so the test controls the replacement history.
                 config.model_provider.name = "test-provider".to_string();
+                config.multi_agent_v2.task_payload =
+                    codex_protocol::protocol::MultiAgentTaskPayload::Plaintext;
                 config.compact_prompt = Some(COMPACT_PROMPT.to_string());
                 config.model_auto_compact_token_limit = Some(200_000);
                 config.model_context_window = Some(1_000_000);

@@ -2,6 +2,7 @@ use crate::FeatureConfig;
 use crate::FeatureToml;
 use codex_network_proxy::CredentialProviderConfig;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::MultiAgentTaskPayload;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -255,6 +256,8 @@ where
 pub struct MultiAgentV2ConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_payload: Option<MultiAgentTaskPayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1))]
     pub max_concurrent_threads_per_session: Option<usize>,

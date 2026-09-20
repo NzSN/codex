@@ -390,10 +390,13 @@ async fn managed_force_shutdown_exits_with_blocked_rollout_writer() -> Result<()
     .await;
     create_config_toml(home.path(), mock.uri(), "never")?;
     let config_path = home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
+    let config = std::fs::read_to_string(&config_path)?
+        .replace("name = \"Mock provider for test\"", "name = \"OpenAI\"");
     std::fs::write(
         config_path,
-        format!("{config}\n[features.multi_agent_v2]\nenabled = true\n"),
+        format!(
+            "{config}\n[features]\nenable_request_compression = false\n\n[features.multi_agent_v2]\nenabled = true\n"
+        ),
     )?;
     let socket_path = home.path().join("control/server.sock");
     let mut server = spawn_server(home.path(), &socket_path)?;

@@ -65,14 +65,14 @@ mod tests {
     use crate::ThreadPersistenceMetadata;
     use crate::ThreadSortKey;
     use codex_protocol::models::BaseInstructions;
+    use codex_protocol::protocol::MultiAgentTaskPayload;
     use codex_protocol::protocol::SessionSource;
+    use pretty_assertions::assert_eq;
 
     #[tokio::test]
     async fn deletion_cleans_associated_sqlite_and_shared_memory()
     -> Result<(), Box<dyn std::error::Error>> {
         use codex_utils_absolute_path::test_support::PathExt;
-        use pretty_assertions::assert_eq;
-
         let home = tempfile::TempDir::new()?;
         let state_db = codex_state::StateRuntime::init(
             codex_state::SqliteConfig::new_for_testing(home.path().abs()),
@@ -177,6 +177,7 @@ mod tests {
                     dynamic_tools: Vec::new(),
                     selected_capability_roots: Vec::new(),
                     multi_agent_version: None,
+                    multi_agent_task_payload: Default::default(),
                     history_mode: ThreadHistoryMode::Legacy,
                     history_base: None,
                     subagent_history_start_ordinal: None,
@@ -428,6 +429,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_thread_persists_multi_agent_task_payload() {
+        let store = InMemoryThreadStore::default();
+        let thread_id = ThreadId::new();
+        let mut params = create_thread_params(thread_id, ThreadHistoryMode::Legacy);
+        params.multi_agent_task_payload = MultiAgentTaskPayload::Plaintext;
+
+        store.create_thread(params).await.expect("create thread");
+
+        let state = store.state.lock().await;
+        let RolloutItem::SessionMeta(meta) = &state.histories[&thread_id][0] else {
+            panic!("first history item should be session metadata");
+        };
+        assert_eq!(
+            meta.meta.multi_agent_task_payload,
+            MultiAgentTaskPayload::Plaintext
+        );
+    }
+
+    #[tokio::test]
     async fn metadata_update_returns_the_materialized_thread() {
         let store = InMemoryThreadStore::default();
         let thread_id = ThreadId::default();
@@ -471,6 +491,7 @@ mod tests {
             dynamic_tools: Vec::new(),
             selected_capability_roots: Vec::new(),
             multi_agent_version: None,
+            multi_agent_task_payload: Default::default(),
             history_mode,
             history_base: None,
             subagent_history_start_ordinal: None,
@@ -618,6 +639,7 @@ impl InMemoryThreadStore {
             history_base: params.history_base,
             subagent_history_start_ordinal: params.subagent_history_start_ordinal,
             multi_agent_version: params.multi_agent_version,
+            multi_agent_task_payload: params.multi_agent_task_payload,
             context_window: Some(SessionContextWindow::new(params.initial_window_id.clone())),
             ..SessionMeta::default()
         };

@@ -394,15 +394,15 @@ fn submit_nested_tool(
             call_id: call.call_id.clone(),
             cell_id: cell_id.to_string(),
         });
-    let result = tool_runtime.handle_tool_call_with_source(
-        step_context,
-        call,
+    let source = step_context.tool_router.normalize_call_source(
+        &call,
         ToolCallSource::CodeMode {
             cell_id: cell_id.to_string(),
             runtime_tool_call_id,
         },
-        cancellation_token,
-    );
+    )?;
+    let result =
+        tool_runtime.handle_tool_call_with_source(step_context, call, source, cancellation_token);
     Ok(async move { Ok(result.await?.code_mode_result()) })
 }
 
@@ -484,6 +484,10 @@ mod tests {
             BTreeMap::new(),
             /*tool_namespaces_info*/ None,
             &[],
+            crate::tools::router::CollaborationMessagePolicy {
+                tools: &[],
+                task_payload: codex_protocol::protocol::MultiAgentTaskPayload::Encrypted,
+            },
         ));
         let step_context = step_context.with_tool_router_for_test(router);
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));

@@ -17,7 +17,7 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::rollout_budget::RolloutBudget;
 use crate::session::emit_subagent_session_started;
 use crate::session::multi_agents::ResolvedMultiAgentV2UsageHints;
-use crate::session_prefix::format_inter_agent_completion_message;
+use crate::session_prefix::format_inter_agent_completion_message_for_delivery;
 use crate::session_prefix::format_subagent_context_line;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadIdGenerator;
@@ -70,6 +70,7 @@ use uuid::Uuid;
 pub(crate) use self::delivery::AgentMessage;
 pub(crate) use self::delivery::MessageDeliveryError;
 pub(crate) use self::delivery::MessageDeliveryMode;
+pub(crate) use self::delivery::validate_completion_envelope_size;
 pub(crate) use self::execution::AgentExecutionGuard;
 use self::execution::AgentExecutionLimiter;
 pub(crate) use self::interrupt::AgentInterruptError;
@@ -685,10 +686,17 @@ impl AgentControl {
                 else {
                     return;
                 };
-                let Some(message) = format_inter_agent_completion_message(
+                let (task_payload, representation) =
+                    match control.agent_delivery_policy(parent_thread_id).await {
+                        Ok(policy) => policy,
+                        Err(_) => return,
+                    };
+                let Some(message) = format_inter_agent_completion_message_for_delivery(
                     parent_agent_path.clone(),
                     child_agent_path.clone(),
                     &status,
+                    task_payload,
+                    representation,
                 ) else {
                     return;
                 };

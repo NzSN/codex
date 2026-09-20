@@ -3,7 +3,9 @@
 
 use crate::session::session::Session;
 use crate::tools::context::ToolInvocation;
+use crate::tools::handlers::multi_agents_spec::apply_multi_agent_task_payload;
 use crate::tools::registry::CoreToolRuntime;
+use codex_protocol::protocol::MultiAgentTaskPayload;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolExecutor;
@@ -15,19 +17,25 @@ use futures::future::BoxFuture;
 use std::sync::Arc;
 
 const MULTI_AGENT_V2_NAMESPACE_DESCRIPTION: &str = "Tools for spawning and managing sub-agents.";
+pub(super) const PLAINTEXT_MULTI_AGENT_V2_NAMESPACE: &str = "collaboration_plaintext";
 
 pub(super) fn multi_agent_v2_handler(
     handler: impl CoreToolRuntime + 'static,
     namespace: Option<&str>,
     description_override: Option<&str>,
+    task_payload: MultiAgentTaskPayload,
 ) -> Arc<dyn CoreToolRuntime> {
-    if namespace.is_none() && description_override.is_none() {
+    if namespace.is_none()
+        && description_override.is_none()
+        && task_payload == MultiAgentTaskPayload::Encrypted
+    {
         return Arc::new(handler);
     }
     Arc::new(MultiAgentV2ToolOverrides {
         handler: Arc::new(handler),
         namespace: namespace.map(str::to_owned),
         description_override: description_override.map(str::to_owned),
+        task_payload,
     })
 }
 
@@ -35,6 +43,7 @@ struct MultiAgentV2ToolOverrides {
     handler: Arc<dyn CoreToolRuntime>,
     namespace: Option<String>,
     description_override: Option<String>,
+    task_payload: MultiAgentTaskPayload,
 }
 
 impl ToolExecutor<ToolInvocation> for MultiAgentV2ToolOverrides {
@@ -53,6 +62,7 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2ToolOverrides {
         {
             tool.description.clone_from(description);
         }
+        apply_multi_agent_task_payload(&mut spec, self.task_payload);
         match (&self.namespace, spec) {
             (Some(namespace), ToolSpec::Function(tool)) => {
                 ToolSpec::Namespace(ResponsesApiNamespace {

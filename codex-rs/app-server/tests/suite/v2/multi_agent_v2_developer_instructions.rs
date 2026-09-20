@@ -26,6 +26,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
+use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::SessionSource;
@@ -190,7 +191,10 @@ async fn spawned_subagents_apply_configured_developer_instruction_precedence(
     } else {
         "gpt-5.4"
     };
-    let mut config = MockResponsesConfig::new(&server.uri()).with_model(configured_model);
+    let mut config = MockResponsesConfig::new(&server.uri())
+        .with_provider_name("OpenAI")
+        .with_model(configured_model)
+        .disable_feature(Feature::EnableRequestCompression);
     if role_has_instructions {
         config =
             config.with_root_config(&format!("developer_instructions = {ROLE_INSTRUCTIONS:?}"));
@@ -332,7 +336,7 @@ async fn compacted_full_history_fork_replaces_parent_developer_instructions() ->
             responses::ev_response_created("parent-spawn-after-compaction"),
             responses::ev_function_call_with_namespace(
                 SPAWN_CALL_ID,
-                NAMESPACE,
+                "collaboration_plaintext",
                 "spawn_agent",
                 &serde_json::to_string(&json!({
                     "message": CHILD_PROMPT,
@@ -372,11 +376,12 @@ async fn compacted_full_history_fork_replaces_parent_developer_instructions() ->
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri())
         .with_model("gpt-5.4")
+        .disable_feature(Feature::EnableRequestCompression)
         .with_root_config(&format!(
             "developer_instructions = {PARENT_INSTRUCTIONS:?}\nmodel_context_window = 100\nmodel_auto_compact_token_limit = 90\ncompact_prompt = {COMPACT_PROMPT:?}"
         ))
         .with_extra_config(&format!(
-            "[features.multi_agent_v2]\nenabled = true\nsubagent_developer_instructions = {CHILD_INSTRUCTIONS:?}"
+            "[features.multi_agent_v2]\nenabled = true\ntask_payload = \"plaintext\"\nsubagent_developer_instructions = {CHILD_INSTRUCTIONS:?}"
         ))
         .write(codex_home.path())?;
     write_models_cache(codex_home.path()).await?;
@@ -433,11 +438,12 @@ async fn compacted_full_history_fork_replaces_parent_developer_instructions() ->
         .await?;
     let child_request = timeout(READ_TIMEOUT, async {
         loop {
-            if let Some(request) = child_request
-                .requests()
-                .into_iter()
-                .find(|request| !request.inputs_of_type("agent_message").is_empty())
-            {
+            if let Some(request) = child_request.requests().into_iter().find(|request| {
+                request
+                    .message_input_texts("user")
+                    .iter()
+                    .any(|text| text.contains(CHILD_PROMPT))
+            }) {
                 break request;
             }
             tokio::task::yield_now().await;
@@ -635,7 +641,9 @@ async fn cold_resume_preserves_effective_developer_instructions_for_worker(
         ));
     }
     MockResponsesConfig::new(&server.uri())
+        .with_provider_name("OpenAI")
         .with_model("gpt-5.4")
+        .disable_feature(Feature::EnableRequestCompression)
         .with_root_config(&format!(
             "developer_instructions = {PARENT_INSTRUCTIONS:?}\nmodel_reasoning_effort = \"high\""
         ))

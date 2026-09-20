@@ -122,6 +122,9 @@ pub(crate) fn build_agent_spawn_config(
 
 pub(crate) fn build_agent_resume_config(turn: &TurnContext) -> Result<Config, String> {
     let mut config = build_agent_shared_config(turn)?;
+    if turn.multi_agent_version == MultiAgentVersion::V2 {
+        config.multi_agent_v2.task_payload_locked = true;
+    }
     // For resume, keep base instructions sourced from rollout/session metadata.
     config.base_instructions = None;
     config.base_instructions_provenance = None;

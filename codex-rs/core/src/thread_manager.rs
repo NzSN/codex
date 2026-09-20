@@ -1,4 +1,7 @@
 mod managed;
+mod multi_agent_task_payload;
+
+use self::multi_agent_task_payload::restore_resumed_multi_agent_task_payload;
 
 use crate::CodexAppsToolsCache;
 use crate::agent::AgentControl;
@@ -2035,6 +2038,7 @@ impl ThreadManagerState {
             )
         });
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
+        restore_resumed_multi_agent_task_payload(&mut config, &initial_history)?;
         if reserved_thread_id.is_some() && matches!(&initial_history, InitialHistory::Resumed(_)) {
             return Err(CodexErr::InvalidRequest(
                 "reserved thread ID cannot be used when resuming a thread".to_string(),

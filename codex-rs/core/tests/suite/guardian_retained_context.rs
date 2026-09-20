@@ -948,6 +948,8 @@ async fn standalone_fork_retains_inherited_user_instructions(
                 .disable(Feature::TokenBudget)
                 .expect("use local compaction for worker checkpoint");
             config.model_provider.name = "Local compaction test provider".to_owned();
+            config.multi_agent_v2.task_payload =
+                codex_protocol::protocol::MultiAgentTaskPayload::Plaintext;
             for feature in [
                 Feature::GuardianApproval,
                 Feature::GuardianThreadContext,
@@ -972,20 +974,23 @@ async fn standalone_fork_retains_inherited_user_instructions(
         "You may publish the release. Delegate an inspection.".to_owned()
     };
     let mut created = test.thread_manager.subscribe_thread_created();
+    let mut spawn_event = ev_function_call_with_namespace(
+        "spawn",
+        "collaboration_plaintext",
+        "spawn_agent",
+        &json!({"task_name": "worker", "message": "Inspect the project.", "fork_turns": "all"})
+            .to_string(),
+    );
+    spawn_event["item"]["encrypted_function_args"] = json!([]);
     mount_sse_sequence(
         &server,
         vec![
-            sse(vec![
-                ev_function_call_with_namespace(
-                    "spawn", "collaboration", "spawn_agent",
-                    &json!({"task_name": "worker", "message": "Inspect the project.", "fork_turns": "all"}).to_string(),
-                ),
-                ev_completed("spawn-response"),
-            ]),
+            sse(vec![spawn_event, ev_completed("spawn-response")]),
             sse(vec![ev_completed("root-complete")]),
             sse(vec![ev_completed("worker-complete")]),
         ],
-    ).await;
+    )
+    .await;
     test.codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
             text: instruction.clone(),

@@ -5,6 +5,7 @@ use crate::agent::child_config::prepare_agent_spawn_config;
 use crate::agent::control::MessageDeliveryMode;
 use crate::agent::control::SpawnAgentForkMode;
 use crate::agent::control::SpawnAgentOptions;
+use crate::agent::control::validate_completion_envelope_size;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent_communication::AgentCommunicationContext;
@@ -126,6 +127,11 @@ async fn handle_spawn_agent(
     let args: SpawnAgentArgs = parse_arguments(&arguments)?;
     let fork_mode = args.fork_mode()?;
     let message = message_content(args.message)?;
+    let agent_message =
+        agent_message_from_tool(message, &source, turn.config.multi_agent_v2.task_payload);
+    agent_message
+        .validate_source_payload(turn.config.multi_agent_v2.task_payload)
+        .map_err(FunctionCallError::RespondToModel)?;
     let role_name = args
         .agent_type
         .as_deref()
@@ -148,6 +154,17 @@ async fn handle_spawn_agent(
     .await
     .map_err(FunctionCallError::RespondToModel)?;
     let config = prepared.config;
+    if config.multi_agent_v2.task_payload != turn.config.multi_agent_v2.task_payload {
+        return Err(FunctionCallError::RespondToModel(
+            "spawned agent task payload mode must match the parent multi-agent tree".to_string(),
+        ));
+    }
+    if config.model_provider_id != turn.config.model_provider_id && fork_mode.is_some() {
+        return Err(FunctionCallError::RespondToModel(
+            "cross-provider agent spawning requires fork_turns=\"none\"; history forks between model providers are not supported"
+                .to_string(),
+        ));
+    }
     let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
     let spawn_source = thread_spawn_source(
         session.thread_id,
@@ -165,11 +182,29 @@ async fn handle_spawn_agent(
         .session_source
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
-    let communication = agent_message_from_tool(message, &source).into_communication(
-        author,
-        new_agent_path.clone(),
-        MessageDeliveryMode::TriggerTurn,
-    );
+    let representation = config.model_provider.agent_message_representation();
+    let completion_representation = turn.config.model_provider.agent_message_representation();
+    if config.multi_agent_v2.task_payload
+        == codex_protocol::protocol::MultiAgentTaskPayload::Plaintext
+        || representation == codex_model_provider_info::AgentMessageRepresentation::UserMessage
+        || completion_representation
+            == codex_model_provider_info::AgentMessageRepresentation::UserMessage
+    {
+        agent_message
+            .validate_plaintext_size(&author, &new_agent_path, MessageDeliveryMode::TriggerTurn)
+            .map_err(FunctionCallError::RespondToModel)?;
+        validate_completion_envelope_size(&author, &new_agent_path)
+            .map_err(FunctionCallError::RespondToModel)?;
+    }
+    let communication = agent_message
+        .into_communication(
+            author,
+            new_agent_path.clone(),
+            MessageDeliveryMode::TriggerTurn,
+            config.multi_agent_v2.task_payload,
+            representation,
+        )
+        .map_err(FunctionCallError::RespondToModel)?;
     let context = AgentCommunicationContext::new(AgentCommunicationKind::Spawn, session.thread_id);
     let multi_agent_v2_usage_hints =
         if is_full_history_fork && turn.multi_agent_version == MultiAgentVersion::V2 {

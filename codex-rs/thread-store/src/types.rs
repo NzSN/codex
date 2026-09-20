@@ -16,6 +16,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::HistoryPosition;
+use codex_protocol::protocol::MultiAgentTaskPayload;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -97,6 +98,8 @@ pub struct CreateThreadParams {
     pub selected_capability_roots: Vec<SelectedCapabilityRoot>,
     /// Multi-agent runtime selected when the thread was created.
     pub multi_agent_version: Option<MultiAgentVersion>,
+    /// Fixed encoding mode for model-authored tasks in the thread's multi-agent tree.
+    pub multi_agent_task_payload: MultiAgentTaskPayload,
     /// Persisted thread history contract selected when the thread was created.
     pub history_mode: ThreadHistoryMode,
     /// Exclusive prefix of another paginated rollout inherited by this thread.

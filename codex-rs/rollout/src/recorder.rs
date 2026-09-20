@@ -64,6 +64,7 @@ use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
 use codex_protocol::protocol::GitInfo as ProtocolGitInfo;
 use codex_protocol::protocol::HistoryPosition;
+use codex_protocol::protocol::MultiAgentTaskPayload;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::SessionMeta;
@@ -113,6 +114,7 @@ pub enum RolloutRecorderParams {
         selected_capability_roots: Vec<SelectedCapabilityRoot>,
         runtime_workspace_roots: Option<Vec<PathBuf>>,
         multi_agent_version: Option<MultiAgentVersion>,
+        multi_agent_task_payload: MultiAgentTaskPayload,
         history_mode: ThreadHistoryMode,
         history_base: Option<HistoryPosition>,
         subagent_history_start_ordinal: Option<u64>,
@@ -217,6 +219,7 @@ impl RolloutRecorderParams {
             selected_capability_roots: Vec::new(),
             runtime_workspace_roots: None,
             multi_agent_version: None,
+            multi_agent_task_payload: MultiAgentTaskPayload::default(),
             history_mode: Default::default(),
             history_base: None,
             subagent_history_start_ordinal: None,
@@ -283,6 +286,20 @@ impl RolloutRecorderParams {
         } = &mut self
         {
             *version = multi_agent_version;
+        }
+        self
+    }
+
+    pub fn with_multi_agent_task_payload(
+        mut self,
+        multi_agent_task_payload: MultiAgentTaskPayload,
+    ) -> Self {
+        if let Self::Create {
+            multi_agent_task_payload: task_payload,
+            ..
+        } = &mut self
+        {
+            *task_payload = multi_agent_task_payload;
         }
         self
     }
@@ -894,6 +911,7 @@ impl RolloutRecorder {
                 selected_capability_roots,
                 runtime_workspace_roots,
                 multi_agent_version,
+                multi_agent_task_payload,
                 history_mode,
                 history_base,
                 subagent_history_start_ordinal,
@@ -942,6 +960,7 @@ impl RolloutRecorder {
                     history_base,
                     subagent_history_start_ordinal,
                     multi_agent_version,
+                    multi_agent_task_payload,
                     context_window: initial_window_id.map(SessionContextWindow::new),
                 };
 

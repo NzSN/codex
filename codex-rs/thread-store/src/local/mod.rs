@@ -777,6 +777,7 @@ mod tests {
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ItemCompletedEvent;
+    use codex_protocol::protocol::MultiAgentTaskPayload;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::ThreadHistoryMode;
@@ -786,6 +787,7 @@ mod tests {
     use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use codex_rollout::RolloutItem;
+    use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
     use super::*;
@@ -1557,6 +1559,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_rollout_restores_plaintext_multi_agent_task_payload() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let thread_id = ThreadId::new();
+        let store = LocalThreadStore::new(config, /*state_db*/ None);
+        let mut create_params = create_thread_params(thread_id);
+        create_params.multi_agent_task_payload = MultiAgentTaskPayload::Plaintext;
+
+        store
+            .create_thread(create_params)
+            .await
+            .expect("create plaintext thread");
+        store
+            .persist_thread(thread_id, PersistContext::Standard)
+            .await
+            .expect("materialize plaintext rollout");
+        store.flush_thread(thread_id).await.expect("flush rollout");
+        let rollout_path = store
+            .live_rollout_path(thread_id)
+            .await
+            .expect("load rollout path");
+        store
+            .shutdown_thread(thread_id)
+            .await
+            .expect("close rollout before reload");
+
+        let restored = RolloutRecorder::get_rollout_history(rollout_path.as_path())
+            .await
+            .expect("reload persisted rollout");
+
+        assert_eq!(
+            restored.get_multi_agent_task_payload(),
+            MultiAgentTaskPayload::Plaintext
+        );
+    }
+
+    #[tokio::test]
     async fn live_writers_reject_cross_process_create_and_resume() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
@@ -2060,6 +2099,7 @@ mod tests {
             dynamic_tools: Vec::new(),
             selected_capability_roots: Vec::new(),
             multi_agent_version: None,
+            multi_agent_task_payload: Default::default(),
             history_mode: ThreadHistoryMode::Legacy,
             history_base: None,
             subagent_history_start_ordinal: None,

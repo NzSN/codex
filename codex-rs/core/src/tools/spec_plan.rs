@@ -53,11 +53,13 @@ use crate::tools::handlers::tool_search_spec::ToolSearchSourceListing;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_web_search_tool;
+use crate::tools::multi_agent_tool::PLAINTEXT_MULTI_AGENT_V2_NAMESPACE;
 use crate::tools::multi_agent_tool::multi_agent_v2_handler;
 #[cfg(test)]
 use crate::tools::registry::RegisteredTool;
 use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
+use crate::tools::router::CollaborationMessagePolicy;
 use crate::tools::router::ToolRouter;
 use crate::tools::tool_namespaces_info::collect_tool_namespaces_info;
 use codex_connectors::apps_config_from_layer_stack;
@@ -79,6 +81,7 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ToolMode;
+use codex_protocol::protocol::MultiAgentTaskPayload;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
@@ -94,6 +97,7 @@ use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
 use codex_tools::collect_request_plugin_install_entries;
 use codex_tools::default_namespace_description;
 use codex_tools::request_user_input_available_modes;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -479,6 +483,7 @@ pub(crate) fn finalize_tool_router(
         })
         .filter(|info| !info.is_empty());
     let child_management_tools = required_child_management_tool_names(turn_context, model_info);
+    let collaboration_message_tools = collaboration_message_tool_names(turn_context, model_info);
 
     Ok(ToolRouter::from_parts(
         registry,
@@ -487,6 +492,10 @@ pub(crate) fn finalize_tool_router(
         code_mode_tool_names,
         tool_namespaces_info,
         &child_management_tools,
+        CollaborationMessagePolicy {
+            tools: &collaboration_message_tools,
+            task_payload: turn_context.config.multi_agent_v2.task_payload,
+        },
     ))
 }
 
@@ -661,6 +670,7 @@ fn required_child_management_tool_names(
         return Vec::new();
     }
 
+    let multi_agent_v2_namespace = multi_agent_v2_tool_namespace(turn_context);
     let (namespace, names): (_, &[&str]) = match turn_context.multi_agent_version {
         MultiAgentVersion::Disabled => return Vec::new(),
         MultiAgentVersion::V1 => (
@@ -668,9 +678,7 @@ fn required_child_management_tool_names(
             &["send_input", "wait_agent", "resume_agent", "close_agent"],
         ),
         MultiAgentVersion::V2 => (
-            namespace_tools_enabled(turn_context)
-                .then_some(turn_context.config.multi_agent_v2.tool_namespace.as_deref())
-                .flatten(),
+            multi_agent_v2_namespace.as_deref(),
             &[
                 "send_message",
                 "followup_task",
@@ -688,6 +696,38 @@ fn required_child_management_tool_names(
         tools.push(ToolName::new(namespace.map(str::to_owned), "wait_agent"));
     }
     tools
+}
+
+fn collaboration_message_tool_names(
+    turn_context: &TurnContext,
+    model_info: &ModelInfo,
+) -> Vec<ToolName> {
+    if !collab_tools_enabled(turn_context, model_info) || !multi_agent_v2_enabled(turn_context) {
+        return Vec::new();
+    }
+    let namespace = multi_agent_v2_tool_namespace(turn_context);
+    ["spawn_agent", "send_message", "followup_task"]
+        .into_iter()
+        .map(|name| ToolName::new(namespace.as_deref().map(str::to_owned), name))
+        .collect()
+}
+
+fn multi_agent_v2_tool_namespace(turn_context: &TurnContext) -> Option<Cow<'_, str>> {
+    if !namespace_tools_enabled(turn_context) {
+        return None;
+    }
+    let namespace = turn_context
+        .config
+        .multi_agent_v2
+        .tool_namespace
+        .as_deref()?;
+    if turn_context.config.multi_agent_v2.task_payload == MultiAgentTaskPayload::Plaintext
+        && namespace == "collaboration"
+    {
+        Some(Cow::Borrowed(PLAINTEXT_MULTI_AGENT_V2_NAMESPACE))
+    } else {
+        Some(Cow::Borrowed(namespace))
+    }
 }
 
 fn image_generation_available(turn_context: &TurnContext, model_info: &ModelInfo) -> bool {
@@ -1251,9 +1291,8 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
             } else {
                 ToolExposure::Direct
             };
-            let tool_namespace = namespace_tools_enabled(turn_context)
-                .then_some(turn_context.config.multi_agent_v2.tool_namespace.as_deref())
-                .flatten();
+            let tool_namespace = multi_agent_v2_tool_namespace(turn_context);
+            let task_payload = turn_context.config.multi_agent_v2.task_payload;
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
             let hide_spawn_agent_metadata =
@@ -1279,26 +1318,29 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                         },
                         spawn_agent_description.map(str::to_owned),
                     ),
-                    tool_namespace,
+                    tool_namespace.as_deref(),
                     // Spawn composes the selected description with runtime model and usage guidance.
                     /*description_override*/
                     None,
+                    task_payload,
                 ),
                 exposure,
             );
             registry.register_trusted_with_exposure(
                 multi_agent_v2_handler(
                     SendMessageHandlerV2,
-                    tool_namespace,
+                    tool_namespace.as_deref(),
                     model_messages.multi_agent_tool_description_override("send_message"),
+                    task_payload,
                 ),
                 exposure,
             );
             registry.register_trusted_with_exposure(
                 multi_agent_v2_handler(
                     FollowupTaskHandlerV2,
-                    tool_namespace,
+                    tool_namespace.as_deref(),
                     model_messages.multi_agent_tool_description_override("followup_task"),
+                    task_payload,
                 ),
                 exposure,
             );
@@ -1306,8 +1348,9 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 registry.register_trusted_with_exposure(
                     multi_agent_v2_handler(
                         WaitAgentHandlerV2::new(context.wait_agent_timeouts),
-                        tool_namespace,
+                        tool_namespace.as_deref(),
                         model_messages.multi_agent_tool_description_override("wait_agent"),
+                        task_payload,
                     ),
                     exposure,
                 );
@@ -1315,16 +1358,18 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
             registry.register_trusted_with_exposure(
                 multi_agent_v2_handler(
                     InterruptAgentHandler,
-                    tool_namespace,
+                    tool_namespace.as_deref(),
                     model_messages.multi_agent_tool_description_override("interrupt_agent"),
+                    task_payload,
                 ),
                 exposure,
             );
             registry.register_trusted_with_exposure(
                 multi_agent_v2_handler(
                     ListAgentsHandlerV2,
-                    tool_namespace,
+                    tool_namespace.as_deref(),
                     model_messages.multi_agent_tool_description_override("list_agents"),
+                    task_payload,
                 ),
                 exposure,
             );

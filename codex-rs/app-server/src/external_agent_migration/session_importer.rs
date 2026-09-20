@@ -485,6 +485,7 @@ impl ExternalAgentSessionImporter {
             selected_capability_roots: Vec::new(),
             runtime_workspace_roots: None,
             multi_agent_version: Some(MultiAgentVersion::V1),
+            multi_agent_task_payload: Default::default(),
             history_mode: ThreadHistoryMode::Legacy,
             history_base: None,
             subagent_history_start_ordinal: None,

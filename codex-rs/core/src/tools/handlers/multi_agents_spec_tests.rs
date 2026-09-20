@@ -3,6 +3,7 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::protocol::MultiAgentTaskPayload;
 use codex_tools::JsonSchemaPrimitiveType;
 use codex_tools::JsonSchemaType;
 use pretty_assertions::assert_eq;
@@ -431,6 +432,33 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
         Some(&vec!["target".to_string(), "message".to_string()])
     );
     assert_eq!(output_schema, None);
+}
+
+#[test]
+fn plaintext_task_payload_removes_message_encryption_markers() {
+    let mut tools = [
+        create_spawn_agent_tool_v2(
+            SpawnAgentToolOptions::default(),
+            /*description_override*/ None,
+        ),
+        create_send_message_tool(),
+        create_followup_task_tool(),
+    ];
+
+    for tool in &mut tools {
+        apply_multi_agent_task_payload(tool, MultiAgentTaskPayload::Plaintext);
+        let ToolSpec::Function(tool) = tool else {
+            panic!("expected function tool");
+        };
+        assert_eq!(
+            tool.parameters
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.get("message"))
+                .and_then(|schema| schema.encrypted),
+            None
+        );
+    }
 }
 
 #[test]
