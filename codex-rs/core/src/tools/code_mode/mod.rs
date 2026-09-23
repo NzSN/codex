@@ -401,8 +401,13 @@ fn submit_nested_tool(
             runtime_tool_call_id,
         },
     )?;
-    let result =
-        tool_runtime.handle_tool_call_with_source(step_context, call, source, cancellation_token);
+    let result = tool_runtime.handle_tool_call_with_source(
+        step_context,
+        call,
+        source,
+        cancellation_token,
+        Arc::default(),
+    );
     Ok(async move { Ok(result.await?.code_mode_result()) })
 }
 

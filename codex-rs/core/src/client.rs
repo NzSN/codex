@@ -92,6 +92,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::MultiAgentTaskPayload;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
@@ -496,10 +497,16 @@ impl ModelClient {
         let auth_env_telemetry =
             collect_auth_env_telemetry(model_provider.info(), codex_api_key_env_enabled);
         let include_attestation = model_provider.supports_attestation();
-        // Reviewers use their own request-level effort even when managed requirements
-        // pin the parent's feature on. Share this decision with update injection and pinning.
+        // Fixed-effort workers use request-level effort even when managed requirements
+        // pin the feature on. Share this decision with update injection and pinning.
+        let memory_consolidation = matches!(
+            &session_source,
+            SessionSource::Internal(InternalSessionSource::MemoryConsolidation)
+                | SessionSource::SubAgent(SubAgentSource::MemoryConsolidation)
+        );
         let reasoning_effort_override_enabled = reasoning_effort_override_enabled
-            && !crate::guardian::is_basic_session_source(&session_source);
+            && !crate::guardian::is_basic_session_source(&session_source)
+            && !memory_consolidation;
         Self {
             state: Arc::new(ModelClientState {
                 thread_id,
@@ -531,8 +538,10 @@ impl ModelClient {
         }
     }
 
-    pub(crate) fn reasoning_effort_override_enabled(&self) -> bool {
+    pub(crate) fn reasoning_effort_override_enabled(&self, model_info: &ModelInfo) -> bool {
         self.state.reasoning_effort_override_enabled
+            && self.state.provider.info().is_openai()
+            && model_info.supports_reasoning_effort_updates
     }
 
     pub(crate) fn with_multi_agent_task_payload(
@@ -883,8 +892,8 @@ impl ModelClient {
             self.state.provider.info().agent_message_representation(),
             self.multi_agent_task_payload,
         )?;
-        if !self.state.reasoning_effort_override_enabled {
-            // Disabling overrides must also recover threads with saved updates.
+        if !self.reasoning_effort_override_enabled(model_info) {
+            // Unsupported models and disabled overrides must also accept saved history.
             // Filter only the request copy; persisted history remains unchanged.
             input.retain(|item| !matches!(item, ResponseItem::ConfigurationUpdate { .. }));
         }
@@ -2584,7 +2593,7 @@ async fn handle_unauthorized(
                     original_error = %original,
                     "provider authentication recovery failed"
                 );
-                return Err(if error.is_retryable() {
+                return Err(if error.retry_delay(/*retry_count*/ 1).is_some() {
                     original
                 } else {
                     error

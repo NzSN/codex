@@ -72,6 +72,7 @@ pub(crate) fn thread_extensions(
         codex_queue_extension::install(&mut builder, queue_service);
     }
     codex_history_notes_extension::install(&mut builder, auth_manager.clone());
+    codex_core::install_agent_message_board(&mut builder, thread_manager.clone());
     if let Some(state_db) = state_db {
         codex_goal_extension::install_with_backend(
             &mut builder,
@@ -95,7 +96,7 @@ pub(crate) fn thread_extensions(
     codex_guardian_v2::install(&mut builder, auth_manager.clone(), thread_manager);
     codex_memories_extension::install(&mut builder, codex_otel::global());
     codex_mcp_extension::install(&mut builder);
-    codex_mcp_extension::install_executor_plugins(&mut builder, environment_manager);
+    codex_mcp_extension::install_plugins(&mut builder, environment_manager);
     codex_web_search_extension::install(&mut builder, auth_manager.clone());
     codex_image_generation_extension::install(&mut builder, auth_manager, |config: &Config| {
         Some(config.codex_home.clone())

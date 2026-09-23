@@ -481,6 +481,10 @@ pub struct ModelInfo {
     pub supports_experimental_context: bool,
     #[serde(default)]
     pub use_responses_lite: bool,
+    /// Whether the model accepts reasoning-effort `configuration_update` items.
+    /// Missing metadata keeps effort changes on the ordinary request parameter.
+    #[serde(default)]
+    pub supports_reasoning_effort_updates: bool,
     #[serde(default)]
     pub node_repl_auto_review_required: bool,
     #[serde(default)]
@@ -587,9 +591,17 @@ pub struct ToolMessage {
     /// text without disabling the tool. Tool-owned runtime guidance is retained.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Complete JSON Schema encoded as a string. Consumed by Multi-Agent V2 tools only.
+    /// Uses the harness's supported schema subset; unrecognized keywords are ignored.
+    /// Missing, null, invalid or unsupported structures, or a root without `type: "object"`
+    /// retains the harness parameters. Schema semantics must remain API-compatible.
+    /// Overrides must declare harness-encrypted properties so their annotations can be retained.
+    /// Argument handling is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<String>,
 }
 
-/// Model-owned descriptions for Multi-Agent V2 tools, independent of their runtime namespace.
+/// Model-owned descriptions and parameters for Multi-Agent V2 tools, independent of their namespace.
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct MultiAgentToolMessages {
     /// Replaces the static description. Missing or null uses the bundled text; an empty string
@@ -981,6 +993,7 @@ mod tests {
             supports_search_tool: false,
             supports_experimental_context: false,
             use_responses_lite: false,
+            supports_reasoning_effort_updates: false,
             guardian: None,
             node_repl_auto_review_required: false,
             node_repl_disabled: false,
@@ -1023,12 +1036,14 @@ mod tests {
                 serde_json::json!({"tools": {"send_user_message_async": {"description": ""}}}),
                 Some(Some(ToolMessage {
                     description: Some(String::new()),
+                    ..Default::default()
                 })),
             ),
             (
                 serde_json::json!({"tools": {"send_user_message_async": {"description": "Catalog description"}}}),
                 Some(Some(ToolMessage {
                     description: Some("Catalog description".to_string()),
+                    ..Default::default()
                 })),
             ),
         ] {
@@ -1392,10 +1407,12 @@ mod tests {
             tools: Some(ToolMessages {
                 send_user_message_async: Some(ToolMessage {
                     description: Some("Catalog description".to_string()),
+                    ..Default::default()
                 }),
                 multi_agent: Some(MultiAgentToolMessages {
                     spawn_agent: Some(ToolMessage {
                         description: Some("Catalog spawn description".to_string()),
+                        ..Default::default()
                     }),
                     ..Default::default()
                 }),
@@ -1470,6 +1487,7 @@ mod tests {
             tools: Some(ToolMessages {
                 send_user_message_async: Some(ToolMessage {
                     description: Some(String::new()),
+                    ..Default::default()
                 }),
                 ..Default::default()
             }),
@@ -1530,6 +1548,7 @@ mod tests {
         assert!(!model.supports_search_tool);
         assert!(!model.supports_experimental_context);
         assert!(!model.use_responses_lite);
+        assert!(!model.supports_reasoning_effort_updates);
         assert!(!model.node_repl_auto_review_required);
         assert!(!model.node_repl_disabled);
         assert_eq!(model.comp_hash, None);

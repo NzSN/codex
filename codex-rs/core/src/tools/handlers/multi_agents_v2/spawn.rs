@@ -2,12 +2,12 @@ use super::*;
 use crate::agent::child_config::SpawnConfigOptions;
 use crate::agent::child_config::SpawnConfigVersion;
 use crate::agent::child_config::prepare_agent_spawn_config;
-use crate::agent::control::MessageDeliveryMode;
-use crate::agent::control::SpawnAgentForkMode;
-use crate::agent::control::SpawnAgentOptions;
 use crate::agent::control::validate_completion_envelope_size;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
+use crate::agent::types::MessageDeliveryMode;
+use crate::agent::types::SpawnAgentForkMode;
+use crate::agent::types::SpawnAgentOptions;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::codex_thread::ThreadConfigSnapshot;
@@ -127,11 +127,6 @@ async fn handle_spawn_agent(
     let args: SpawnAgentArgs = parse_arguments(&arguments)?;
     let fork_mode = args.fork_mode()?;
     let message = message_content(args.message)?;
-    let agent_message =
-        agent_message_from_tool(message, &source, turn.config.multi_agent_v2.task_payload);
-    agent_message
-        .validate_source_payload(turn.config.multi_agent_v2.task_payload)
-        .map_err(FunctionCallError::RespondToModel)?;
     let role_name = args
         .agent_type
         .as_deref()
@@ -161,8 +156,7 @@ async fn handle_spawn_agent(
     }
     if config.model_provider_id != turn.config.model_provider_id && fork_mode.is_some() {
         return Err(FunctionCallError::RespondToModel(
-            "cross-provider agent spawning requires fork_turns=\"none\"; history forks between model providers are not supported"
-                .to_string(),
+            "cross-provider agent spawning requires fork_turns=\"none\"; history forks between model providers are not supported".to_string(),
         ));
     }
     let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
@@ -182,6 +176,8 @@ async fn handle_spawn_agent(
         .session_source
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
+    let agent_message =
+        agent_message_from_tool(message, &source, config.multi_agent_v2.task_payload);
     let representation = config.model_provider.agent_message_representation();
     let completion_representation = turn.config.model_provider.agent_message_representation();
     if config.multi_agent_v2.task_payload

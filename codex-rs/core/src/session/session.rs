@@ -72,7 +72,7 @@ pub(crate) struct Session {
     pub(super) features: ManagedFeatures,
     pub(crate) guardian_context_mode: GuardianContextMode,
     pub(super) isolation: codex_extension_api::SessionIsolation,
-    pub(crate) allowed_tools: Option<Arc<codex_extension_api::AllowedTools>>,
+    pub(crate) tool_policy: Arc<codex_extension_api::ToolPolicy>,
     pub(crate) windows_sandbox_proxy_settings_mode:
         codex_sandboxing::WindowsSandboxProxySettingsMode,
     pub(super) multi_agent_version: OnceLock<MultiAgentVersion>,
@@ -125,7 +125,6 @@ pub(crate) struct SessionConfiguration {
     // internal sandbox decisions should use the selected environment's configuration.
     pub(super) windows_sandbox_level: WindowsSandboxLevel,
     pub(super) windows_sandbox_type: SandboxType,
-    pub(super) windows_sandbox_private_desktop: bool,
     pub(super) use_legacy_landlock: bool,
 
     /// Legacy thread cwd used when a turn does not select an environment.
@@ -180,7 +179,6 @@ impl SessionConfiguration {
             shell_environment_policy: self.shell_environment_policy.clone(),
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_type: self.windows_sandbox_type,
-            windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
             use_legacy_landlock: self.use_legacy_landlock,
             exec_policy: None,
             mcp_policy: None,
@@ -739,7 +737,7 @@ impl Session {
         mut session_configuration: SessionConfiguration,
         environment_selections: &[TurnEnvironmentSelection],
         config: Arc<Config>,
-        instructions: SessionInstructions,
+        mut instructions: SessionInstructions,
         installation_id: String,
         auth_manager: Arc<AuthManager>,
         models_manager: SharedModelsManager,
@@ -758,7 +756,7 @@ impl Session {
         extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
         mut thread_extension_init: ExtensionDataInit,
         client_mcp_extensions: ClientMcpExtensions,
-        agent_control: AgentControl,
+        agent_control: LocalAgentControl,
         reserved_thread_id: Option<ThreadId>,
         environment_manager: Arc<EnvironmentManager>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
@@ -871,6 +869,16 @@ impl Session {
                 ));
             }
         };
+        let isolation = thread_extension_init
+            .get::<codex_extension_api::SessionIsolation>()
+            .map(|policy| *policy)
+            .unwrap_or_default();
+        if !session_configuration.session_source.is_non_root_agent()
+            && isolation != codex_extension_api::SessionIsolation::Isolated
+        {
+            instructions.thread_provider = agent_control
+                .root_thread_instructions_provider(thread_id, instructions.thread_provider);
+        }
         // Ephemeral forks reuse cache routing, without sharing storage or lifecycle identity.
         let fork_cache_key = match &initial_history {
             InitialHistory::Forked(items)
@@ -951,16 +959,15 @@ impl Session {
         // Publish the already resolved model before extensions make startup decisions.
         // Turn construction refreshes this attachment when the selected model changes.
         thread_extension_init.insert(model_info);
-        let isolation = thread_extension_init
-            .get::<codex_extension_api::SessionIsolation>()
-            .map(|policy| *policy)
-            .unwrap_or_default();
-        let allowed_tools = thread_extension_init
-            .get::<codex_extension_api::AllowedTools>()
-            .or_else(|| {
-                // Older reviewer rollouts predate the explicit startup setting.
-                crate::guardian::is_basic_session_source(&session_configuration.session_source)
-                    .then(|| Arc::new(codex_guardian_reviewer::reviewer_allowed_tools()))
+        let tool_policy = thread_extension_init
+            .get::<codex_extension_api::ToolPolicy>()
+            .unwrap_or_else(|| {
+                // Older reviewer rollouts predate the explicit startup policy.
+                if crate::guardian::is_basic_session_source(&session_configuration.session_source) {
+                    Arc::new(codex_guardian_reviewer::reviewer_tool_policy())
+                } else {
+                    Arc::default()
+                }
             });
         let mcp_thread_init = thread_extension_init.clone();
         let thread_extension_data = codex_extension_api::ExtensionData::new_with_init(
@@ -1128,6 +1135,7 @@ impl Session {
                     mcp_thread_init_for_startup,
                     thread_extension_data_for_mcp,
                     McpThreadIdentity {
+                        auth_changed: false,
                         session_source: &mcp_session_source,
                         originator: &mcp_originator,
                         disabled_plugin_ids: &mcp_disabled_plugin_ids,
@@ -1619,6 +1627,14 @@ impl Session {
                 &initial_history,
             );
             let codex_responses_headers = thread_extension_data.get::<crate::CodexResponsesHeaders>();
+            // Ephemeral title requests use request-level effort even when managed settings
+            // enable overrides. The client-supplied tag selects cache behavior, not permissions.
+            let title_request = config.ephemeral && matches!(
+                session_configuration.thread_source.as_ref(),
+                Some(ThreadSource::Feature(feature)) if feature == "thread_title"
+            );
+            let reasoning_effort_override_enabled =
+                config.features.enabled(Feature::ReasoningEffortOverride) && !title_request;
             let services = SessionServices {
                 // Start with an empty connection set. The initialized set is
                 // published after SessionConfigured so MCP events follow it.
@@ -1682,7 +1698,7 @@ impl Session {
                     session_configuration.originator.clone(),
                     config.model_verbosity,
                     config.features.enabled(Feature::ContentItemKinds),
-                    config.features.enabled(Feature::ReasoningEffortOverride),
+                    reasoning_effort_override_enabled,
                     config.features.enabled(Feature::EnableRequestCompression),
                     config.features.enabled(Feature::RuntimeMetrics),
                     Self::build_model_client_beta_features_header(config.as_ref()),
@@ -1729,7 +1745,7 @@ impl Session {
                 features: config.features.clone(),
                 guardian_context_mode,
                 isolation,
-                allowed_tools,
+                tool_policy,
                 windows_sandbox_proxy_settings_mode,
                 multi_agent_version,
                 mcp_refresh: McpRefresh::new(),
@@ -1814,6 +1830,10 @@ impl Session {
                         &sess.services.mcp_thread_init,
                         &sess.services.thread_extension_data,
                         McpThreadIdentity {
+                            auth_changed: !sess
+                                .services
+                                .mcp_runtime
+                                .current_auth_matches(latest_auth.as_ref()),
                             session_source: &session_configuration.session_source,
                             originator: &session_configuration.originator,
                             disabled_plugin_ids: &session_configuration.disabled_plugin_ids,

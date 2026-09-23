@@ -68,6 +68,12 @@ use tokio::sync::oneshot;
 
 const ONE_PIXEL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 
+#[path = "scenarios_agent_message_board.rs"]
+mod agent_message_board;
+
+#[path = "scenarios_shared_instructions.rs"]
+mod shared_instructions;
+
 fn skills_extensions() -> Arc<ExtensionRegistry<Config>> {
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
     install(&mut extensions, |config: &Config| SkillsExtensionConfig {
@@ -277,7 +283,8 @@ async fn astra_asks_an_async_question_and_receives_the_answer_while_working() ->
     })
     .await;
 
-    let answer = format!("{}Customers", AnsweredQuestion::new(question).render());
+    let question_id = json!(["request_user_input_async", "audience-question", 0]).to_string();
+    let answer = AnsweredQuestion::new(&question_id, question, "Customers").render();
     test.codex
         .steer_turn(TurnInputRequest::user_input(vec![text(&answer)]), turn_id)
         .await?;
@@ -521,6 +528,69 @@ async fn astra_omits_disabled_executor_skills_from_model_context() -> Result<()>
         context_snapshot::format_context_snapshot(
             "Astra sees the active executor skill while the caller-disabled skill is omitted.",
             &[SnapshotEntry::body(&body)],
+            &ContextSnapshotOptions::default().include_request_settings(),
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multi_agent_catalog_parameters() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            configure_scenario_catalog(config);
+            config.workspace_roots = vec![config.cwd.clone()];
+        })
+        .with_model_info_override("gpt-6-astra", |model| {
+            model.model_messages.as_mut().expect("model messages").tools = Some(
+                serde_json::from_value(json!({"multi_agent": {"list_agents": {
+                    "parameters": json!({
+                        "type": "object",
+                        "properties": {"path_prefix": {
+                            "type": "string",
+                            "description": "Inspect agents within this task path.",
+                            "minLength": 1,
+                            "maxLength": 128,
+                        }},
+                        "required": ["path_prefix"],
+                        "additionalProperties": false,
+                    }).to_string(),
+                }}}))
+                .expect("catalog tool messages"),
+            );
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("agents-response"),
+                ev_function_call_with_namespace(
+                    "agents-call",
+                    "collaboration",
+                    "list_agents",
+                    r#"{"path_prefix":"/root"}"#,
+                ),
+                ev_completed("agents-response"),
+            ]),
+            sse(vec![
+                ev_assistant_message("final", "Only the root agent is working on this task."),
+                ev_completed("final-response"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("Check which agents are working under /root before delegating more work.")
+        .await?;
+    insta::assert_snapshot!(
+        "multi_agent_catalog_parameters",
+        context_snapshot::format_request_history_snapshot(
+            "Astra calls list_agents using the selected catalog parameter schema.",
+            &mock.requests(),
             &ContextSnapshotOptions::default().include_request_settings(),
         )
     );
@@ -821,7 +891,7 @@ async fn astra_refreshes_plugin_tools_and_skills_in_an_existing_thread() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn subagent_browser_auth_returns_handoff_without_prompting() -> Result<()> {
+async fn subagent_browser_auth_resolves_user_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_wine_exec!(Ok(()), "the MCP fixture requires a host Python interpreter");
     use super::mcp_subagent_elicitation::Caller;
@@ -831,7 +901,7 @@ async fn subagent_browser_auth_returns_handoff_without_prompting() -> Result<()>
     let requests =
         mcp_server_elicitation_scenario(Caller::Subagent, RequestKind::BrowserAuth).await?;
     let snapshot = context_snapshot::format_request_history_snapshot(
-        "An MCP browser sign-in request fails in a subagent without prompting the user; the next model request contains guidance to ask the parent.",
+        "A subagent waits for an MCP browser sign-in prompt, then receives the accepted response and continues.",
         &requests,
         &ContextSnapshotOptions::default()
             .rewrite_known_segments()
@@ -840,7 +910,7 @@ async fn subagent_browser_auth_returns_handoff_without_prompting() -> Result<()>
     let snapshot = regex_lite::Regex::new(r"Wall time: [0-9]+(?:\.[0-9]+)? seconds")?
         .replace_all(&snapshot, "Wall time: <DURATION> seconds")
         .into_owned();
-    insta::assert_snapshot!("subagent_browser_auth_handoff", snapshot);
+    insta::assert_snapshot!("subagent_browser_auth", snapshot);
     Ok(())
 }
 
