@@ -3,7 +3,7 @@ source: tui/src/app/tests.rs
 expression: rendered
 ---
 ╭────────────────────────────────────────╮
-│ >_ OpenAI Codex (v0.156.1)             │
+│ >_ OpenAI Codex (v0.157.1)             │
 │                                        │
 │ model:     gpt-test   /model to change │
 │ directory: <thread cwd>                │

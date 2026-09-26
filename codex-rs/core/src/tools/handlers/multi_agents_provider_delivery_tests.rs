@@ -83,7 +83,7 @@ async fn provider_delivery_matrix(parent: &str, child: &str, delivery: Delivery)
         .start_thread(StartThreadOptions::new((*turn.config).clone()))
         .await
         .expect("start parent");
-    session.services.agent_control = manager.agent_control();
+    set_agent_control(&mut session, manager.agent_control());
     session.thread_id = root.thread_id;
     let session = Arc::new(session);
     let turn = Arc::new(turn);
@@ -187,7 +187,7 @@ async fn oversized_plaintext_spawn_is_rejected_before_allocating_child() {
         .start_thread(StartThreadOptions::new((*turn.config).clone()))
         .await
         .expect("start parent");
-    session.services.agent_control = manager.agent_control();
+    set_agent_control(&mut session, manager.agent_control());
     session.thread_id = root.thread_id;
     let session = Arc::new(session);
     let turn = Arc::new(turn);
@@ -255,7 +255,7 @@ async fn encrypted_mode_compatibility_parent_reserves_native_child_completion_en
         .start_thread(StartThreadOptions::new((*turn.config).clone()))
         .await
         .expect("start parent");
-    session.services.agent_control = manager.agent_control();
+    set_agent_control(&mut session, manager.agent_control());
     session.thread_id = root.thread_id;
     let before = manager.list_thread_ids().await;
 

@@ -1,15 +1,8 @@
-//! Delivers captured agent input without exposing local loading and eviction to callers.
-//!
-//! Target checks precede reload, and queue-only messages retain their non-waking semantics.
+//! Converts agent messages into attributed input while preserving their wake mode.
 
 use super::LocalAgentControl;
-use crate::agent::api::AgentInput;
-use crate::agent::api::DeliveryReceipt;
-use crate::agent::api::SendRequest;
 use crate::agent::types::AgentMessage;
 use crate::agent::types::MessageDeliveryMode;
-use crate::agent_communication::AgentCommunicationContext;
-use crate::agent_communication::AgentCommunicationKind;
 use crate::context::ContextualUserFragment;
 use crate::context::InterAgentCompletionMessage;
 use crate::context::InterAgentMessage;
@@ -18,7 +11,6 @@ use crate::inter_agent_request_projection::validate_plaintext_fragment_size;
 use codex_model_provider_info::AgentMessageRepresentation;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
-use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::MultiAgentTaskPayload;
@@ -122,94 +114,6 @@ impl LocalAgentControl {
                 .model_provider
                 .agent_message_representation(),
         ))
-    }
-
-    /// Resolves and delivers captured input, restoring an evicted runtime when necessary.
-    pub(crate) async fn send(&self, request: SendRequest) -> CodexResult<DeliveryReceipt> {
-        let SendRequest {
-            caller,
-            target,
-            resume_config,
-            input,
-            mut start_options,
-        } = request;
-        let target = self.resolve_target(caller, &target)?;
-        let (metadata, submission_id) = match input {
-            AgentInput::UserInput(input) => {
-                let receiver = self.get_agent_metadata(target);
-                if receiver.is_some() {
-                    self.ensure_v2_agent_loaded(resume_config, target, /*parent*/ None)
-                        .await?;
-                }
-                let submission_id = self.send_input(target, input, start_options).await?;
-                (receiver.unwrap_or_default(), submission_id)
-            }
-            AgentInput::Message { message, mode } => {
-                let receiver = self.ensure_agent_known(target)?;
-                let author = self
-                    .ensure_agent_known(caller)?
-                    .agent_path
-                    .unwrap_or_else(AgentPath::root);
-                if mode == MessageDeliveryMode::TriggerTurn
-                    && receiver.agent_path.as_ref().is_some_and(AgentPath::is_root)
-                {
-                    return Err(CodexErr::UnsupportedOperation(
-                        "Follow-up tasks can't target the root agent".to_string(),
-                    ));
-                }
-                let receiver_path = receiver.agent_path.clone().ok_or_else(|| {
-                    CodexErr::UnsupportedOperation(
-                        "target agent is missing an agent_path".to_string(),
-                    )
-                })?;
-                message
-                    .validate_source_payload(resume_config.multi_agent_v2.task_payload)
-                    .map_err(CodexErr::UnsupportedOperation)?;
-                if resume_config.multi_agent_v2.task_payload == MultiAgentTaskPayload::Plaintext {
-                    message
-                        .validate_plaintext_size(&author, &receiver_path, mode)
-                        .map_err(CodexErr::UnsupportedOperation)?;
-                }
-                let sender_task_payload = resume_config.multi_agent_v2.task_payload;
-                self.ensure_v2_agent_loaded(resume_config, target, /*parent*/ None)
-                    .await?;
-                let (receiver_task_payload, receiver_representation) =
-                    self.agent_delivery_policy(target).await?;
-                if receiver_task_payload != sender_task_payload {
-                    return Err(CodexErr::UnsupportedOperation("target agent task payload mode does not match the sender's multi-agent tree".to_string()));
-                }
-                let communication = message
-                    .into_communication(
-                        author,
-                        receiver_path,
-                        mode,
-                        receiver_task_payload,
-                        receiver_representation,
-                    )
-                    .map_err(CodexErr::UnsupportedOperation)?;
-                let kind = match mode {
-                    MessageDeliveryMode::QueueOnly => {
-                        start_options.parent_turn_id = None;
-                        AgentCommunicationKind::Message
-                    }
-                    MessageDeliveryMode::TriggerTurn => AgentCommunicationKind::Followup,
-                };
-                let submission_id = self
-                    .send_inter_agent_communication(
-                        target,
-                        communication,
-                        AgentCommunicationContext::new(kind, caller),
-                        start_options,
-                    )
-                    .await?;
-                (receiver, submission_id)
-            }
-        };
-        Ok(DeliveryReceipt {
-            thread_id: target,
-            metadata,
-            submission_id,
-        })
     }
 }
 
