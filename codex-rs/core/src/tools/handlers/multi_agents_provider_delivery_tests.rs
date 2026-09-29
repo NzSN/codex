@@ -105,7 +105,7 @@ async fn provider_delivery_matrix(parent: &str, child: &str, delivery: Delivery)
         .expect("spawn matrix recipient");
     let recipient = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "matrix_worker")
         .await
         .expect("resolve recipient");

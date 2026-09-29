@@ -105,7 +105,7 @@ impl LocalAgentControl {
         &self,
         target: ThreadId,
     ) -> CodexResult<(MultiAgentTaskPayload, AgentMessageRepresentation)> {
-        let state = self.upgrade()?;
+        let state = self.runtime.upgrade()?;
         let receiver_thread = state.get_thread(target).await?;
         let receiver_config = receiver_thread.session.get_config().await;
         Ok((
