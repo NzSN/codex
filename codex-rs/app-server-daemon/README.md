@@ -190,3 +190,54 @@ The daemon stores its local state under `CODEX_HOME/app-server-daemon/`:
 - `app-server.pid` for the app-server process record
 - `app-server-updater.pid` for the pid-backed standalone updater loop
 - `daemon.lock` for daemon-wide lifecycle serialization
+
+## FAQ
+
+### Why does `task_payload = "plaintext"` cause “Experimental feature request failed” with a custom build?
+
+With this custom configuration:
+
+```toml
+[features.multi_agent_v2]
+enabled = true
+task_payload = "plaintext"
+```
+
+The CLI may report:
+
+```text
+Error: Cannot use the shared background server: Experimental feature request failed.
+```
+
+The CLI connects to a separately installed background server. Running a newly
+built `./codex` does not replace that server. If the managed package lacks the
+custom `task_payload` setting, its configuration reload fails with
+`data did not match any variant of untagged enum FeatureToml`. The CLI's startup
+feature check then fails. A custom CLI and an incompatible managed server can
+both report the same version, so matching version numbers do not prove support
+for local changes.
+
+Check the managed executable path with:
+
+```sh
+./codex app-server daemon version
+```
+
+To use the custom CLI's embedded server immediately:
+
+```sh
+./codex --no-daemon
+```
+
+To keep using the shared server, copy and pin a complete custom CLI package as
+the daemon package. For the local installation used in this repository:
+
+```sh
+/home/nzsn/.local/.codex-package/bin/codex app-server daemon update --from-cli --yes
+```
+
+Use the executable inside your own complete custom package if its location
+differs. A bare `target/release/codex` executable cannot supply the package and
+its helpers. Updating a running daemon restarts it and may interrupt active
+work. A plain `daemon restart` reuses the selected managed package, so it does
+not install the custom build.
