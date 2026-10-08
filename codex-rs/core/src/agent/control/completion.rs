@@ -8,10 +8,12 @@ use crate::TurnStartOptions;
 use crate::agent::api::AgentTurnOutcome;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
+use crate::session_prefix::format_guardian_interruption_message;
 use crate::session_prefix::format_inter_agent_completion_message_for_delivery;
 use codex_protocol::AgentPath;
 use codex_protocol::items::SubAgentActivityItem;
 use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentActivityKind;
@@ -89,13 +91,25 @@ impl LocalAgentControl {
         else {
             return;
         };
-        let Some(message) = format_inter_agent_completion_message_for_delivery(
-            parent_agent_path.clone(),
-            child_agent_path.clone(),
-            &status,
-            task_payload,
-            representation,
-        ) else {
+        let message = match (&status, outcome.error_info) {
+            (AgentStatus::Errored(error), Some(CodexErrorInfo::TooManyDenials)) => {
+                format_guardian_interruption_message(
+                    parent_agent_path.clone(),
+                    child_agent_path.clone(),
+                    error,
+                    task_payload,
+                    representation,
+                )
+            }
+            _ => format_inter_agent_completion_message_for_delivery(
+                parent_agent_path.clone(),
+                child_agent_path.clone(),
+                &status,
+                task_payload,
+                representation,
+            ),
+        };
+        let Some(message) = message else {
             return;
         };
         // `communication` owns the message. Keep a second copy only when the

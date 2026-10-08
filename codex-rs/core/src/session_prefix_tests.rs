@@ -1,12 +1,15 @@
+use codex_model_provider_info::AgentMessageRepresentation;
 use codex_protocol::AgentPath;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::MultiAgentTaskPayload;
 use codex_utils_output_truncation::approx_token_count;
+use pretty_assertions::assert_eq;
 
 use super::COMPLETION_MESSAGE_MAX_TOKENS;
 use super::ERROR_NEXT_ACTION;
+use super::GUARDIAN_NEXT_ACTION;
+use super::format_guardian_interruption_message;
 use super::format_inter_agent_completion_message_for_delivery;
-use codex_model_provider_info::AgentMessageRepresentation;
 
 #[test]
 fn error_completion_message_stays_below_manual_review_threshold() {
@@ -82,4 +85,45 @@ fn compatibility_completion_is_bounded_in_encrypted_mode() {
             <= crate::inter_agent_request_projection::MAX_PLAINTEXT_COLLABORATION_FRAGMENT_BYTES
     );
     assert!(message.contains("truncated"));
+}
+
+#[test]
+fn guardian_interruption_message_stays_below_manual_review_threshold() {
+    let message = format_guardian_interruption_message(
+        AgentPath::root(),
+        AgentPath::try_from("/root/worker").expect("valid agent path"),
+        &"Action is not authorized. ".repeat(1_000),
+        MultiAgentTaskPayload::Encrypted,
+        AgentMessageRepresentation::Native,
+    )
+    .expect("Guardian interruption should produce a completion message");
+
+    assert!(approx_token_count(&message) < COMPLETION_MESSAGE_MAX_TOKENS);
+    assert!(message.contains(GUARDIAN_NEXT_ACTION));
+}
+
+#[test]
+fn guardian_interruption_is_bounded_for_plaintext_delivery() {
+    for (task_payload, representation) in [
+        (
+            MultiAgentTaskPayload::Plaintext,
+            AgentMessageRepresentation::Native,
+        ),
+        (
+            MultiAgentTaskPayload::Encrypted,
+            AgentMessageRepresentation::UserMessage,
+        ),
+    ] {
+        let message = format_guardian_interruption_message(
+            AgentPath::root(),
+            AgentPath::try_from("/root/worker").expect("valid agent path"),
+            &"🙂".repeat(2_000),
+            task_payload,
+            representation,
+        )
+        .expect("Guardian interruption should produce a completion message");
+
+        assert!(message.len() <= crate::inter_agent_request_projection::MAX_PLAINTEXT_COLLABORATION_FRAGMENT_BYTES);
+        assert!(message.contains(GUARDIAN_NEXT_ACTION));
+    }
 }
