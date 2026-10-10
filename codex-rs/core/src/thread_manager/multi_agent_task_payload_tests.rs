@@ -13,6 +13,7 @@ use std::sync::Arc;
 fn resumed_history_with_task_payload(task_payload: MultiAgentTaskPayload) -> InitialHistory {
     let thread_id = ThreadId::new();
     InitialHistory::Resumed(ResumedHistory {
+        history_revision: None,
         conversation_id: thread_id,
         history: Arc::new(vec![RolloutItem::SessionMeta(SessionMetaLine {
             meta: SessionMeta {

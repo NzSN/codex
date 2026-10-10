@@ -1,9 +1,12 @@
 use crate::agent::types::AgentMetadata;
+use codex_model_provider_info::AgentMessageRepresentation;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::error::AgentErrorContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
+use codex_protocol::protocol::MultiAgentTaskPayload;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -39,6 +42,7 @@ struct ActiveAgents {
 struct RegisteredAgent {
     path: String,
     evicted_environments: Option<Vec<TurnEnvironmentSelection>>,
+    evicted_delivery_policy: Option<(MultiAgentTaskPayload, AgentMessageRepresentation)>,
 }
 
 impl RegisteredAgent {
@@ -46,6 +50,7 @@ impl RegisteredAgent {
         Self {
             path,
             evicted_environments: None,
+            evicted_delivery_policy: None,
         }
     }
 }
@@ -92,9 +97,10 @@ impl AgentRegistry {
     ) -> Result<SpawnReservation> {
         if let Some(max_threads) = max_threads {
             if !self.try_increment_spawned(max_threads) {
-                return Err(CodexErr::new(CodexErrorDetails::AgentLimitReached {
-                    max_threads,
-                }));
+                return Err(
+                    CodexErr::new(CodexErrorDetails::AgentLimitReached { max_threads })
+                        .with_agent_context(AgentErrorContext::RegistryCapacity),
+                );
             }
         } else {
             self.total_count.fetch_add(1, Ordering::AcqRel);
@@ -173,6 +179,7 @@ impl AgentRegistry {
         &self,
         thread_id: ThreadId,
         environments: Vec<TurnEnvironmentSelection>,
+        delivery_policy: (MultiAgentTaskPayload, AgentMessageRepresentation),
     ) {
         let mut active_agents = self
             .active_agents
@@ -180,6 +187,7 @@ impl AgentRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(agent) = active_agents.thread_paths.get_mut(&thread_id) {
             agent.evicted_environments = Some(environments);
+            agent.evicted_delivery_policy = Some(delivery_policy);
         }
     }
 
@@ -197,6 +205,18 @@ impl AgentRegistry {
             .and_then(|agent| agent.evicted_environments.clone())
     }
 
+    pub(crate) fn evicted_delivery_policy(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<(MultiAgentTaskPayload, AgentMessageRepresentation)> {
+        self.active_agents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .thread_paths
+            .get(&thread_id)
+            .and_then(|agent| agent.evicted_delivery_policy)
+    }
+
     pub(crate) fn clear_evicted_environments(&self, thread_id: ThreadId) {
         let mut active_agents = self
             .active_agents
@@ -204,6 +224,7 @@ impl AgentRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(agent) = active_agents.thread_paths.get_mut(&thread_id) {
             agent.evicted_environments = None;
+            agent.evicted_delivery_policy = None;
         }
     }
 
@@ -302,7 +323,8 @@ impl AgentRegistry {
         match active_agents.agent_tree.entry(agent_path.to_string()) {
             Entry::Occupied(_) => Err(CodexErr::UnsupportedOperation(format!(
                 "agent path `{agent_path}` already exists"
-            ))),
+            ))
+            .with_agent_context(AgentErrorContext::DuplicatePath)),
             Entry::Vacant(entry) => {
                 entry.insert(AgentMetadata {
                     agent_path: Some(agent_path.clone()),
@@ -364,6 +386,7 @@ impl SpawnReservation {
             .reserve_agent_nickname(names, preferred)
             .ok_or_else(|| {
                 CodexErr::UnsupportedOperation("no available agent nicknames".to_string())
+                    .with_agent_context(AgentErrorContext::NicknameUnavailable)
             })?;
         self.reserved_agent_nickname = Some(agent_nickname.clone());
         Ok(agent_nickname)

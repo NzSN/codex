@@ -106,7 +106,18 @@ impl LocalAgentControl {
         target: ThreadId,
     ) -> CodexResult<(MultiAgentTaskPayload, AgentMessageRepresentation)> {
         let state = self.runtime.upgrade()?;
-        let receiver_thread = state.get_thread(target).await?;
+        let receiver_thread = match state.get_thread(target).await {
+            Ok(thread) => thread,
+            Err(err) => {
+                // Locally evicted recipients retain their policy so queue-only mail
+                // can be validated without restoring an idle session.
+                return self
+                    .runtime
+                    .registry
+                    .evicted_delivery_policy(target)
+                    .ok_or(err);
+            }
+        };
         let receiver_config = receiver_thread.session.get_config().await;
         Ok((
             receiver_config.multi_agent_v2.task_payload,

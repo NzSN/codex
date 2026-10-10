@@ -155,8 +155,17 @@ impl AgentControl for LocalAgentControl {
                             .map_err(CodexErr::UnsupportedOperation)?;
                     }
                     let sender_task_payload = resume_config.multi_agent_v2.task_payload;
-                    self.ensure_v2_agent_loaded(resume_config, target, /*parent*/ None)
-                        .await?;
+                    // Cold-restored children still reload lazily on any message. Only
+                    // locally evicted recipients can retain mail without reloading.
+                    // Loaded recipients go straight to delivery, which rejects sends
+                    // racing an in-progress eviction when it acquires the residency pin.
+                    if mode == MessageDeliveryMode::TriggerTurn
+                        || (self.runtime.upgrade()?.get_thread(target).await.is_err()
+                            && self.runtime.registry.evicted_environments(target).is_none())
+                    {
+                        self.ensure_v2_agent_loaded(resume_config, target, /*parent*/ None)
+                            .await?;
+                    }
                     let (receiver_task_payload, receiver_representation) =
                         self.agent_delivery_policy(target).await?;
                     if receiver_task_payload != sender_task_payload {
@@ -195,6 +204,17 @@ impl AgentControl for LocalAgentControl {
                 submission_id,
             })
         })
+    }
+
+    fn take_mailbox(
+        &self,
+        agent: ThreadId,
+    ) -> Vec<codex_protocol::protocol::InterAgentCommunication> {
+        self.runtime.mailboxes.take(agent)
+    }
+
+    fn watch_mailbox(&self, agent: ThreadId) -> tokio::sync::watch::Receiver<bool> {
+        self.runtime.mailboxes.watch(agent)
     }
 
     fn ensure_child_loaded(&self, parent: ThreadId, child: ThreadId) -> BoxFuture<'_, Result<()>> {
