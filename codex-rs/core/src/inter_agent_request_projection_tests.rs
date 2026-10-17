@@ -17,6 +17,8 @@ fn agent_message(content: Vec<AgentMessageInputContent>) -> ResponseItem {
 fn compatibility_projection_preserves_order_and_maps_id_stably() {
     let text = "Message Type: MESSAGE\nTask name: /root/child\nSender: /root\nPayload:\nhello";
     let ordinary = ResponseItem::Message {
+        encrypted_content: None,
+        status: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {

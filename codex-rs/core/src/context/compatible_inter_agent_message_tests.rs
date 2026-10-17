@@ -11,6 +11,8 @@ fn renders_attributed_content_as_a_classified_user_message() {
     assert_eq!(
         ContextualUserFragment::into(CompatibleInterAgentMessage::new(content)),
         ResponseItem::Message {
+            encrypted_content: None,
+            status: None,
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
