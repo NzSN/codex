@@ -1,6 +1,9 @@
 use super::*;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemMetadata;
+use codex_protocol::models::ContentItemNamespace;
+use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use pretty_assertions::assert_eq;
 
 fn agent_message(content: Vec<AgentMessageInputContent>) -> ResponseItem {
@@ -122,6 +125,75 @@ fn compatibility_projection_preserves_multipart_text_boundaries() {
             text: "attribution\npayload".to_string(),
         }]
     );
+}
+
+#[test]
+fn compatibility_projection_preserves_source_and_turn_metadata() {
+    let source = ContentItemMetadata::tool(Some(ContentItemNamespace::Other(
+        "plaintext_team".to_string(),
+    )));
+    for same_source in [true, false] {
+        let mut message = agent_message(vec![
+            AgentMessageInputContent::InputText {
+                text: "attribution".to_string(),
+            },
+            AgentMessageInputContent::InputText {
+                text: "payload".to_string(),
+            },
+        ]);
+        let ResponseItem::AgentMessage {
+            internal_chat_message_metadata_passthrough,
+            ..
+        } = &mut message
+        else {
+            unreachable!();
+        };
+        *internal_chat_message_metadata_passthrough =
+            Some(InternalChatMessageMetadataPassthrough {
+                turn_id: Some("turn-one".to_string()),
+                content_item_metadata: Some(vec![
+                    source.clone(),
+                    if same_source {
+                        source.clone()
+                    } else {
+                        ContentItemMetadata::default()
+                    },
+                ]),
+                ..Default::default()
+            });
+        let mut input = vec![message];
+
+        project_inter_agent_communications(
+            &mut input,
+            AgentMessageRepresentation::UserMessage,
+            MultiAgentTaskPayload::Plaintext,
+        )
+        .expect("project attributed communication");
+
+        let ResponseItem::Message {
+            content,
+            internal_chat_message_metadata_passthrough: Some(metadata),
+            ..
+        } = &input[0]
+        else {
+            panic!("expected projected message with metadata");
+        };
+        assert_eq!(metadata.turn_id.as_deref(), Some("turn-one"));
+        assert_eq!(content.len(), 1);
+        assert_eq!(metadata.content_item_kinds.as_ref().unwrap().len(), 1);
+        assert_eq!(
+            metadata.content_item_metadata,
+            same_source.then(|| vec![source.clone()])
+        );
+        let projected = input.clone();
+        project_inter_agent_communications(
+            &mut input,
+            AgentMessageRepresentation::UserMessage,
+            MultiAgentTaskPayload::Plaintext,
+        )
+        .expect("projected message is unchanged on repeated projection");
+        assert_eq!(input, projected);
+    }
 }
 
 #[test]

@@ -18,7 +18,13 @@ pub(crate) fn project_inter_agent_communications(
     task_payload: MultiAgentTaskPayload,
 ) -> Result<(), CodexErr> {
     for item in input {
-        let ResponseItem::AgentMessage { id, content, .. } = item else {
+        let ResponseItem::AgentMessage {
+            id,
+            content,
+            internal_chat_message_metadata_passthrough,
+            ..
+        } = item
+        else {
             continue;
         };
         if representation == AgentMessageRepresentation::Native
@@ -38,8 +44,34 @@ pub(crate) fn project_inter_agent_communications(
         }
         if representation == AgentMessageRepresentation::UserMessage {
             let projected_id = id.as_ref().map(compatible_message_id);
-            let mut projected =
-                ContextualUserFragment::into(CompatibleInterAgentMessage::new(text));
+            // Text parts become one fragment. Retain their source only when all
+            // parts have the same attribution; missing or mixed sources stay unknown.
+            let source = internal_chat_message_metadata_passthrough
+                .as_ref()
+                .and_then(|metadata| metadata.content_item_metadata.as_ref())
+                .filter(|metadata| metadata.len() == content.len())
+                .and_then(|metadata| {
+                    let first = metadata.first()?;
+                    metadata
+                        .iter()
+                        .all(|part| part == first)
+                        .then(|| first.clone())
+                })
+                .unwrap_or_default();
+            let mut projected = ContextualUserFragment::into(
+                CompatibleInterAgentMessage::new(text).with_metadata(source),
+            );
+            if let ResponseItem::Message {
+                internal_chat_message_metadata_passthrough: projected_metadata,
+                ..
+            } = &mut projected
+                && let Some(mut metadata) = internal_chat_message_metadata_passthrough.clone()
+            {
+                let annotations = projected_metadata.take().unwrap_or_default();
+                metadata.content_item_kinds = annotations.content_item_kinds;
+                metadata.content_item_metadata = annotations.content_item_metadata;
+                *projected_metadata = Some(metadata);
+            }
             projected.set_id(projected_id);
             *item = projected;
         }

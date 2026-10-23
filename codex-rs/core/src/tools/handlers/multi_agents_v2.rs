@@ -58,6 +58,10 @@ fn agent_message_from_tool(
 ) -> AgentMessage {
     if task_payload == codex_protocol::protocol::MultiAgentTaskPayload::Plaintext
         || source.is_plaintext_message()
+        || matches!(
+            source,
+            crate::tools::context::ToolCallSource::CodeMode { .. }
+        )
     {
         AgentMessage::Plaintext(message)
     } else {

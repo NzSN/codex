@@ -15,7 +15,7 @@ fn resumed_history_with_task_payload(task_payload: MultiAgentTaskPayload) -> Ini
     InitialHistory::Resumed(ResumedHistory {
         history_revision: None,
         conversation_id: thread_id,
-        history: Arc::new(vec![RolloutItem::SessionMeta(SessionMetaLine {
+        history: Arc::new(vec![RolloutItem::SessionMeta(Box::new(SessionMetaLine {
             meta: SessionMeta {
                 id: thread_id,
                 session_id: thread_id.into(),
@@ -23,7 +23,7 @@ fn resumed_history_with_task_payload(task_payload: MultiAgentTaskPayload) -> Ini
                 ..SessionMeta::default()
             },
             git: None,
-        })]),
+        }))]),
         rollout_path: None,
     })
 }

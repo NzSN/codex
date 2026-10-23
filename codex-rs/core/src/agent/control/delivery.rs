@@ -89,14 +89,20 @@ fn render_plaintext_message(
         MessageDeliveryMode::QueueOnly => InterAgentMessageType::Message,
         MessageDeliveryMode::TriggerTurn => InterAgentMessageType::NewTask,
     };
-    InterAgentMessage::new(message_type, recipient.clone(), author.clone(), message).render()
+    InterAgentMessage::new(message_type, recipient.clone(), author.clone(), message)
+        .render()
+        .into_text()
+        .unwrap_or_default()
 }
 
 pub(crate) fn validate_completion_envelope_size(
     parent: &AgentPath,
     child: &AgentPath,
 ) -> Result<(), String> {
-    let content = InterAgentCompletionMessage::new(parent.clone(), child.clone(), "").render();
+    let content = InterAgentCompletionMessage::new(parent.clone(), child.clone(), "")
+        .render()
+        .into_text()
+        .unwrap_or_default();
     validate_plaintext_fragment_size(&content).map_err(|err| err.to_string())
 }
 

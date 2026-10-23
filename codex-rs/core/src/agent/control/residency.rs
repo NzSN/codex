@@ -4,6 +4,7 @@ use super::LocalAgentControl;
 use super::LocalAgentRuntime;
 use super::runtime::AgentTreeMembership;
 use crate::agent::AgentStatus;
+use crate::agent::registry::EvictedEnvironments;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::thread_manager::ThreadManagerState;
@@ -76,12 +77,21 @@ impl ThreadManagerState {
                 .collect();
             let runtime = &thread.session.services.local_agent_runtime;
             let _ = runtime.mailboxes.enqueue(thread_id, /*id*/ None, mail);
-            let environments = thread.environment_selections().await;
             let config = thread.session.get_config().await;
             let delivery_policy = (
                 config.multi_agent_v2.task_payload,
                 config.model_provider.agent_message_representation(),
             );
+            // Preserve configured bindings across eviction without retaining turn-only attachments.
+            // Raw bindings keep the original pending owner configuration alive.
+            let environments = EvictedEnvironments {
+                selections: thread.environment_selections().await,
+                bindings: thread
+                    .session
+                    .services
+                    .turn_environments
+                    .configured_snapshot_now(),
+            };
             let mut threads = manager.threads.write().await;
             if threads
                 .get(&thread_id)

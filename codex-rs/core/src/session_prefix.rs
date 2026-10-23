@@ -40,7 +40,12 @@ pub(crate) fn format_inter_agent_completion_message_for_delivery(
     if task_payload == MultiAgentTaskPayload::Encrypted
         && representation == AgentMessageRepresentation::Native
     {
-        return Some(InterAgentCompletionMessage::new(task_name, sender, payload).render());
+        return Some(
+            InterAgentCompletionMessage::new(task_name, sender, payload)
+                .render()
+                .into_text()
+                .unwrap_or_default(),
+        );
     }
 
     let payload = truncate_text(&payload, TruncationPolicy::Tokens(ERROR_MAX_TOKENS));
@@ -53,7 +58,10 @@ fn render_bounded_plaintext_completion(
     payload: &str,
 ) -> Option<String> {
     let render = |payload: &str| {
-        InterAgentCompletionMessage::new(task_name.clone(), sender.clone(), payload).render()
+        InterAgentCompletionMessage::new(task_name.clone(), sender.clone(), payload)
+            .render()
+            .into_text()
+            .unwrap_or_default()
     };
     let empty = render("");
     if empty.len()
@@ -100,7 +108,12 @@ pub(crate) fn format_guardian_interruption_message(
     if task_payload == MultiAgentTaskPayload::Encrypted
         && representation == AgentMessageRepresentation::Native
     {
-        return Some(InterAgentCompletionMessage::new(task_name, sender, payload).render());
+        return Some(
+            InterAgentCompletionMessage::new(task_name, sender, payload)
+                .render()
+                .into_text()
+                .unwrap_or_default(),
+        );
     }
     render_bounded_plaintext_completion(task_name, sender, &payload)
 }
