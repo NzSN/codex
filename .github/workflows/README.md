@@ -1,5 +1,22 @@
 # Workflow Strategy
 
+## NzSN fork releases
+
+`rust-release.yml` builds only `x86_64-unknown-linux-musl` on the standard
+`ubuntu-24.04` GitHub runner. Push a `rust-v<version>` tag pointing to a commit
+whose `codex-rs/Cargo.toml` workspace version matches the tag. For a retry, use
+the workflow's manual trigger and provide the existing tag.
+
+The release uploads only to `NzSN/codex` GitHub Releases. It does not invoke
+npm, PyPI, R2, WinGet, website deployment, or signing services. The downstream
+Python SDK release workflow is guarded to run only in `openai/codex`.
+
+Assets include CLI and app-server packages with their code-mode host, ripgrep,
+and sandbox resources, plus the responses API proxy, debug symbols, source
+commit, configuration schema, and checksums. Extract the whole package and run
+`bin/codex`; retain the adjacent resource directories. The binaries are unsigned
+and do not include optional native voice runtime bundles.
+
 The workflows in this directory are split so that pull requests get fast, review-friendly signal while `main` still gets the full cross-platform verification pass.
 
 ## Pull Requests
