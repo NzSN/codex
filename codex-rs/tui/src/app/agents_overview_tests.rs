@@ -1584,6 +1584,34 @@ async fn failed_root_switch_keeps_background_requests_on_the_active_session() ->
 }
 
 #[tokio::test]
+async fn overview_opens_an_empty_loaded_session_without_a_local_blank_snapshot() -> Result<()> {
+    let mut app = Box::pin(make_test_app()).await;
+    trust_fixture_folders(&mut app);
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let target = Box::pin(app_server.start_thread(&app.config)).await?;
+    let thread_id = target.session.thread_id;
+    let path = target
+        .session
+        .rollout_path
+        .expect("empty session rollout path");
+    assert!(!path.exists());
+    assert!(!app.agents_overview.blank_sessions.contains_key(&thread_id));
+    let thread = app_server
+        .thread_read(thread_id, /*include_turns*/ false)
+        .await?;
+    app.agents_overview.threads.insert(thread_id, Some(thread));
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    Box::pin(app.select_agents_overview_thread(&mut tui, &mut app_server, thread_id)).await?;
+
+    assert_eq!(app.current_displayed_thread_id(), Some(thread_id));
+    assert!(!app.chat_widget.is_external_writer_view());
+    assert!(path.exists());
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn root_switch_preserves_vim_line_yank() -> Result<()> {
     // Keep the large setup and root-switch futures off the test thread's stack.
     let mut app = Box::pin(make_test_app()).await;

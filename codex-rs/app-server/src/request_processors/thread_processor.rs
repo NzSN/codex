@@ -4760,13 +4760,35 @@ impl ThreadRequestProcessor {
         } else if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
             && let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await
         {
-            let source_thread = self
+            let source_thread = match self
                 .read_stored_thread_for_resume(
                     &params.thread_id,
                     /*path*/ None,
                     /*include_history*/ false,
                 )
-                .await?;
+                .await
+            {
+                Err(error)
+                    if error.code == crate::error_code::INVALID_REQUEST_ERROR_CODE
+                        && error.message
+                            == format!("no rollout found for thread id {existing_thread_id}") =>
+                {
+                    // Empty live sessions have no rollout until their first message.
+                    // Save their own settings and model context before reading persisted
+                    // metadata, including the metadata needed for empty paginated history.
+                    existing_thread
+                        .checkpoint_thread_settings()
+                        .await
+                        .map_err(thread_store_resume_read_error)?;
+                    self.read_stored_thread_for_resume(
+                        &params.thread_id,
+                        /*path*/ None,
+                        /*include_history*/ false,
+                    )
+                    .await?
+                }
+                result => result?,
+            };
             Some((existing_thread_id, existing_thread, source_thread))
         } else {
             let source_thread = self

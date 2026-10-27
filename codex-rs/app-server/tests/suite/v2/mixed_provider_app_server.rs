@@ -752,6 +752,175 @@ mod local_clients {
     }
 
     #[tokio::test]
+    async fn empty_threads_resume_with_their_context_from_either_local_client() -> Result<()> {
+        let home = TempDir::new()?;
+        let default_catalog = home.path().join("default.json");
+        let kimi_catalog = home.path().join("kimi.json");
+        write_catalog(&default_catalog, 32_000, "DEFAULT_EMPTY_CONTEXT")?;
+        write_catalog(&kimi_catalog, 96_000, "KIMI_EMPTY_CONTEXT")?;
+        std::fs::write(
+            home.path().join("config.toml"),
+            format!(
+                r#"
+model_provider = "default-provider"
+model = "same-model"
+model_catalog_json = {catalog:?}
+[features]
+code_mode = false
+code_mode_host = false
+[model_providers.default-provider]
+name = "Default fixture"
+base_url = "http://127.0.0.1:9/v1"
+wire_api = "responses"
+[model_providers.kimi]
+name = "Kimi fixture"
+base_url = "http://127.0.0.1:9/v1"
+wire_api = "responses"
+"#,
+                catalog = default_catalog.display().to_string(),
+            ),
+        )?;
+        let socket = home.path().join("server.sock");
+        let listen = format!("unix://{}", socket.display());
+        let mut process = TestAppServer::builder()
+            .with_codex_home(home.path())
+            .without_managed_config()
+            .with_args(&["--listen", &listen])
+            .build()
+            .await?;
+        timeout(Duration::from_secs(15), async {
+            while !socket.exists() {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await?;
+        let mut client_a = connect(&socket).await?;
+        let mut client_b = connect(&socket).await?;
+        let mut saved_threads = Vec::new();
+        for mode in ["legacy", "paginated"] {
+            for (provider, observer_first) in [
+                ("kimi", false),
+                ("default-provider", false),
+                ("kimi", true),
+                ("default-provider", true),
+            ] {
+                let (owner, observer) = if provider == "kimi" {
+                    (&mut client_a, &mut client_b)
+                } else {
+                    (&mut client_b, &mut client_a)
+                };
+                let choices = if provider == "kimi" {
+                    json!({"modelProvider":provider,"modelCatalogJson":kimi_catalog,"model":"same-model"})
+                } else {
+                    json!({})
+                };
+                let context = call(owner, 2, "modelContext/resolve", choices).await?;
+                assert!(context.get("error").is_none(), "{context}");
+                let started = call(
+                    owner,
+                    3,
+                    "thread/start",
+                    json!({"modelContextId":context["result"]["modelContextId"],"historyMode":mode}),
+                )
+                .await?;
+                assert!(started.get("error").is_none(), "{started}");
+                let thread = &started["result"]["thread"];
+                let thread_id = thread["id"].as_str().expect("started thread");
+                let path = std::path::Path::new(thread["path"].as_str().expect("rollout path"));
+                assert!(
+                    !path.exists(),
+                    "empty threads start without a saved rollout"
+                );
+                // The creating client and the other panel must both be able to open it.
+                let clients = if observer_first {
+                    [observer, owner]
+                } else {
+                    [owner, observer]
+                };
+                for client in clients {
+                    for exclude_turns in [true, false] {
+                        let inherited = call(
+                            client,
+                            4,
+                            "modelContext/resolve",
+                            json!({"intent":"resume","threadId":thread_id}),
+                        )
+                        .await?;
+                        assert!(inherited.get("error").is_none(), "{inherited}");
+                        let resumed = call(
+                            client,
+                            5,
+                            "thread/resume",
+                            json!({"threadId":thread_id,"modelContextId":inherited["result"]["modelContextId"],"excludeTurns":exclude_turns}),
+                        )
+                        .await?;
+                        assert!(resumed.get("error").is_none(), "{mode}: {resumed}");
+                        assert_eq!(resumed["result"]["modelProvider"], provider);
+                        assert_eq!(resumed["result"]["model"], "same-model");
+                        assert_eq!(resumed["result"]["thread"]["id"], thread_id);
+                        assert_eq!(resumed["result"]["thread"]["historyMode"], mode);
+                        assert_eq!(resumed["result"]["thread"]["turns"], json!([]));
+                        assert_eq!(
+                            resumed["result"]["modelContext"],
+                            started["result"]["modelContext"]
+                        );
+                    }
+                }
+                assert!(path.exists(), "explicit resume saves the empty session");
+                saved_threads.push(started["result"].clone());
+            }
+        }
+        client_a.close(None).await?;
+        client_b.close(None).await?;
+        process.send_sigterm()?;
+        assert!(process.wait_for_exit().await?.success());
+        // Opening an empty session must save its model context before the source catalogs
+        // disappear, just as opening a session that already has user messages does.
+        std::fs::remove_file(&default_catalog)?;
+        std::fs::remove_file(&kimi_catalog)?;
+        let mut restarted = TestAppServer::builder()
+            .with_codex_home(home.path())
+            .without_managed_config()
+            .with_args(&["--listen", &listen])
+            .build()
+            .await?;
+        timeout(Duration::from_secs(15), async {
+            while !socket.exists() {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await?;
+        let mut client = connect(&socket).await?;
+        for saved in saved_threads {
+            let thread_id = &saved["thread"]["id"];
+            let inherited = call(
+                &mut client,
+                2,
+                "modelContext/resolve",
+                json!({"intent":"resume","threadId":thread_id}),
+            )
+            .await?;
+            assert!(inherited.get("error").is_none(), "{inherited}");
+            let resumed = call(
+                &mut client,
+                3,
+                "thread/resume",
+                json!({"threadId":thread_id,"modelContextId":inherited["result"]["modelContextId"]}),
+            )
+            .await?;
+            assert!(resumed.get("error").is_none(), "{resumed}");
+            assert_eq!(resumed["result"]["modelProvider"], saved["modelProvider"]);
+            assert_eq!(resumed["result"]["model"], saved["model"]);
+            assert_eq!(resumed["result"]["modelContext"], saved["modelContext"]);
+            assert_eq!(resumed["result"]["thread"]["turns"], json!([]));
+        }
+        client.close(None).await?;
+        restarted.send_sigterm()?;
+        assert!(restarted.wait_for_exit().await?.success());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn two_local_connections_keep_context_ownership_and_concurrent_provider_routes()
     -> Result<()> {
         let first = create_mock_responses_server_repeating_assistant("first").await;
