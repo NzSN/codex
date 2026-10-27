@@ -88,6 +88,7 @@ mod mcp_tool;
 mod memory_read;
 mod memory_reset;
 mod misalignment_policy;
+mod mixed_provider_app_server;
 mod model_auto_review;
 mod model_list;
 mod model_list_requirements_tests;

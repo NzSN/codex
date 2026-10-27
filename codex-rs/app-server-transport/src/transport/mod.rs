@@ -199,6 +199,7 @@ pub enum TransportEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionOrigin {
+    LocalSocket,
     Stdio,
     InProcess,
     WebSocket,
@@ -382,6 +383,7 @@ mod tests {
             id: RequestId::Integer(7),
             result: Box::new(ClientResponsePayload::Initialize(
                 codex_app_server_protocol::InitializeResponse {
+                    server_capabilities: None,
                     user_agent: "codex-test-agent".to_string(),
                     codex_home,
                     platform_family: "unix".to_string(),

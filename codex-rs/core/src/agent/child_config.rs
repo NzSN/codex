@@ -11,6 +11,7 @@ use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use codex_features::Feature;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::openai_models::ModelPreset;
@@ -276,12 +277,11 @@ pub(crate) async fn apply_spawn_agent_service_tier(
         return Ok(());
     }
 
+    let models_manager = resolve_child_models_manager(session, config).await?;
     let model = config.model.clone().ok_or_else(|| {
         "spawn_agent could not resolve the child model for service tier validation".to_string()
     })?;
-    let model_info = session
-        .services
-        .models_manager
+    let model_info = models_manager
         .get_model_info(model.as_str(), &config.to_models_manager_config())
         .await;
 
@@ -299,7 +299,14 @@ async fn apply_spawn_agent_role(
     let previous_model = config.model.clone();
     let previous_reasoning_effort = config.model_reasoning_effort.clone();
     apply_role_to_config(config, role_name).await?;
-    if config.model == previous_model && config.model_reasoning_effort == previous_reasoning_effort
+    let context_changed = config
+        .resolved_model_context
+        .as_ref()
+        .is_some_and(|context| !context.matches_config(config));
+    let models_manager = resolve_child_models_manager(session, config).await?;
+    if !context_changed
+        && config.model == previous_model
+        && config.model_reasoning_effort == previous_reasoning_effort
     {
         return Ok(());
     }
@@ -310,9 +317,7 @@ async fn apply_spawn_agent_role(
     let model = config.model.clone().ok_or_else(|| {
         "spawn_agent could not resolve the child model for reasoning effort validation".to_string()
     })?;
-    let model_info = session
-        .services
-        .models_manager
+    let model_info = models_manager
         .get_model_info(&model, &config.to_models_manager_config())
         .await;
     if model_info.used_fallback_model_metadata {
@@ -324,6 +329,60 @@ async fn apply_spawn_agent_role(
         &model_info.supported_reasoning_levels,
         &reasoning_effort,
     )
+}
+
+/// Select a role's default and metadata from its own provider before validating child settings.
+async fn resolve_child_models_manager(
+    session: &Session,
+    config: &mut Config,
+) -> Result<SharedModelsManager, String> {
+    let Some(context) = config.resolved_model_context.clone() else {
+        return Ok(session.services.models_manager.clone());
+    };
+    crate::model_context::validate_managed_catalog(config, config.model_catalog.as_ref())
+        .map_err(|error| error.to_string())?;
+    let context = if context.matches_config(config) {
+        context
+    } else {
+        crate::model_context::ResolvedModelContext::resolve(
+            config,
+            session.services.auth_manager.clone(),
+            None,
+        )
+        .map_err(|error| error.to_string())?
+    };
+    context
+        .validate_static_model_selection(config.model.as_deref())
+        .map_err(|error| error.to_string())?;
+    let manager = context.models_manager.clone();
+    if config.model_catalog.is_none() && config.model_provider.model_catalog_url.is_some() {
+        let models = manager
+            .list_models(
+                RefreshStrategy::OnlineIfUncached,
+                config.http_client_factory(),
+            )
+            .await;
+        if models.is_empty()
+            || config
+                .model
+                .as_ref()
+                .is_some_and(|selected| !models.iter().any(|model| model.model == *selected))
+        {
+            return Err("selected child model is unavailable in the provider catalog".to_string());
+        }
+    }
+    config.model = Some(
+        manager
+            .get_default_model(
+                &config.model,
+                false,
+                RefreshStrategy::Offline,
+                config.http_client_factory(),
+            )
+            .await,
+    );
+    config.resolved_model_context = Some(context);
+    Ok(manager)
 }
 
 fn find_spawn_agent_model_name(
@@ -373,4 +432,192 @@ fn validate_spawn_agent_reasoning_effort(
     Err(format!(
         "Reasoning effort `{requested_reasoning_effort}` is not supported for model `{model}`. Supported reasoning efforts: {supported}"
     ))
+}
+
+#[cfg(test)]
+mod mixed_context_tests {
+    use super::*;
+    use crate::config::AgentRoleConfig;
+    use codex_protocol::openai_models::ModelVisibility;
+    use codex_protocol::openai_models::ModelsResponse;
+
+    #[tokio::test]
+    async fn same_provider_model_only_role_cannot_escape_static_catalog() {
+        let (session, turn) = crate::session::tests::make_session_and_context().await;
+        let home = tempfile::tempdir().expect("home");
+        let mut config = (*turn.config).clone();
+        let model = codex_models_manager::bundled_models_response()
+            .expect("catalog")
+            .models
+            .into_iter()
+            .find(|model| model.slug == "gpt-5.5")
+            .expect("model");
+        config.model = Some(model.slug.clone());
+        config.model_catalog = Some(ModelsResponse {
+            models: vec![model],
+        });
+        config.resolved_model_context = Some(
+            crate::model_context::ResolvedModelContext::resolve(
+                &config,
+                session.services.auth_manager.clone(),
+                None,
+            )
+            .expect("parent context"),
+        );
+        let path = home.path().join("model-only.toml");
+        std::fs::write(&path, "model = 'not-in-catalog'\n").expect("role");
+        config.agent_roles.insert(
+            "model-only".into(),
+            AgentRoleConfig {
+                config_file: Some(path.clone()),
+                ..Default::default()
+            },
+        );
+        let mut invalid = config.clone();
+        let error = apply_spawn_agent_role(&session, &mut invalid, Some("model-only"))
+            .await
+            .expect_err("reusing a context must still validate model membership");
+        assert!(
+            error.contains("absent from the static model catalog"),
+            "{error}"
+        );
+        std::fs::write(path, "model = 'gpt-5.5'\n").expect("supported role");
+        let original = config.resolved_model_context.clone().expect("context");
+        apply_spawn_agent_role(&session, &mut config, Some("model-only"))
+            .await
+            .expect("supported same-provider model");
+        assert!(std::sync::Arc::ptr_eq(
+            &original,
+            config
+                .resolved_model_context
+                .as_ref()
+                .expect("context retained")
+        ));
+    }
+
+    #[test_case::test_case(false; "native_default")]
+    #[test_case::test_case(true; "static_default_and_child_metadata")]
+    #[tokio::test]
+    async fn provider_only_role_resolves_child_default_before_settings_validation(
+        static_catalog: bool,
+    ) {
+        let (mut session, turn) = crate::session::tests::make_session_and_context().await;
+        let home = tempfile::tempdir().expect("temporary home");
+        let mut config = (*turn.config).clone();
+        let mut model = codex_models_manager::bundled_models_response()
+            .expect("bundled catalog")
+            .models
+            .into_iter()
+            .find(|model| model.slug == "gpt-5.5")
+            .expect("parent model");
+        model.visibility = ModelVisibility::List;
+        model.supported_reasoning_levels = vec![ReasoningEffortPreset {
+            effort: ReasoningEffort::Low,
+            description: "parent low".into(),
+        }];
+        config.model = Some(model.slug.clone());
+        config.model_reasoning_effort = Some(ReasoningEffort::Low);
+        config.model_catalog = Some(ModelsResponse {
+            models: vec![model.clone()],
+        });
+        let parent = crate::model_context::ResolvedModelContext::resolve(
+            &config,
+            session.services.auth_manager.clone(),
+            None,
+        )
+        .expect("parent context");
+        session.services.models_manager = parent.models_manager.clone();
+        config.resolved_model_context = Some(parent);
+        let role_path = home.path().join("child.toml");
+        let catalog_path = home.path().join("child-models.json");
+        let catalog_setting = if static_catalog {
+            model.context_window = Some(96_000);
+            model.service_tiers.clear();
+            model.additional_speed_tiers.clear();
+            model.default_service_tier = None;
+            model.supported_reasoning_levels = vec![ReasoningEffortPreset {
+                effort: ReasoningEffort::High,
+                description: "child high".into(),
+            }];
+            std::fs::write(
+                &catalog_path,
+                serde_json::to_vec(&ModelsResponse {
+                    models: vec![model.clone()],
+                })
+                .expect("catalog JSON"),
+            )
+            .expect("child catalog");
+            format!(
+                "model_catalog_json = {:?}\n",
+                catalog_path.display().to_string()
+            )
+        } else {
+            String::new()
+        };
+        std::fs::write(
+            &role_path,
+            format!(
+                "model_provider = 'ollama'\nmodel_reasoning_effort = 'high'\n{catalog_setting}"
+            ),
+        )
+        .expect("role");
+        config.agent_roles.insert(
+            "provider-only".into(),
+            AgentRoleConfig {
+                config_file: Some(role_path),
+                ..Default::default()
+            },
+        );
+        let parent_config = config.clone();
+        apply_spawn_agent_role(&session, &mut config, Some("provider-only"))
+            .await
+            .expect("choose target provider's default before validating inherited effort");
+        assert_eq!(config.model_provider_id, "ollama");
+        assert!(config.model.is_some());
+        assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
+        let context = config
+            .resolved_model_context
+            .as_ref()
+            .expect("child context");
+        assert!(context.matches_config(&config));
+        if static_catalog {
+            assert_eq!(config.model.as_deref(), Some("gpt-5.5"));
+            assert_eq!(
+                context
+                    .snapshot
+                    .catalog
+                    .as_ref()
+                    .expect("static snapshot")
+                    .models[0]
+                    .context_window,
+                Some(96_000)
+            );
+            session.services.agent_control.propagate_config_update(
+                crate::agent::api::AgentConfigUpdate::ServiceTier(Some("fast".into())),
+            );
+            config.model = None;
+            apply_spawn_agent_service_tier(&session, &mut config)
+                .await
+                .expect("default precedes tier validation");
+            assert_eq!(config.model.as_deref(), Some("gpt-5.5"));
+            assert_eq!(
+                config.service_tier, None,
+                "child metadata does not support the parent's fast tier"
+            );
+            model.supported_reasoning_levels[0].effort = ReasoningEffort::Low;
+            std::fs::write(
+                catalog_path,
+                serde_json::to_vec(&ModelsResponse {
+                    models: vec![model],
+                })
+                .expect("catalog JSON"),
+            )
+            .expect("restrict child effort");
+            let mut unsupported = parent_config;
+            let error = apply_spawn_agent_role(&session, &mut unsupported, Some("provider-only"))
+                .await
+                .expect_err("validate against the new child's effort levels");
+            assert!(error.contains("not supported"), "{error}");
+        }
+    }
 }

@@ -23,13 +23,32 @@ impl AppServerSession {
         self.available_models = models;
     }
 
-    pub(crate) fn fetch_models(&self, request_id: Uuid, app_event_tx: AppEventSender) {
+    pub(crate) fn fetch_models(
+        &self,
+        request_id: Uuid,
+        thread_id: Option<codex_protocol::ThreadId>,
+        app_event_tx: AppEventSender,
+    ) {
         let request_handle = self.request_handle();
+        let thread_id = if self.client.mixed_provider_app_server_version() == Some(1) {
+            thread_id.map(|id| id.to_string())
+        } else {
+            None
+        };
+        let model_context_id = if thread_id.is_none() {
+            self.pending_model_context
+                .as_ref()
+                .map(|context| context.model_context_id.clone())
+        } else {
+            None
+        };
         tokio::spawn(async move {
             let result = request_handle
                 .request_typed::<ModelListResponse>(ClientRequest::ModelList {
                     request_id: RequestId::String(format!("model-list-{request_id}")),
                     params: ModelListParams {
+                        model_context_id,
+                        thread_id,
                         cursor: None,
                         limit: None,
                         include_hidden: Some(true),

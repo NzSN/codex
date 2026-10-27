@@ -360,6 +360,12 @@
         "null"
       ]
     },
+    "modelContextId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "modelProvider": {
       "type": [
         "string",

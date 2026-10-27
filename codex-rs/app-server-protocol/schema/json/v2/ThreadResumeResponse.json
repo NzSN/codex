@@ -1016,6 +1016,35 @@
       ],
       "type": "string"
     },
+    "ModelContextInfo": {
+      "properties": {
+        "catalogDigest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "catalogSource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modelProvider": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "modelProvider",
+        "version"
+      ],
+      "type": "object"
+    },
     "MultiAgentMode": {
       "description": "Controls the effective multi-agent delegation instructions for a turn. `custom` means the configured mode hint defines the policy instead of a built-in policy.",
       "oneOf": [
@@ -3229,6 +3258,16 @@
     },
     "model": {
       "type": "string"
+    },
+    "modelContext": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ModelContextInfo"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "modelProvider": {
       "type": "string"

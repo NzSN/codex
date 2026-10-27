@@ -133,6 +133,7 @@ mod managed_daemon;
 mod mcp_refresh;
 mod message_processor;
 mod model_catalog;
+mod model_context;
 mod models;
 mod models_refresh_worker;
 mod notification_media;

@@ -175,6 +175,26 @@ impl AppServerSession {
         if model_settings == ResumeModelSettings::OverrideFromCurrentConfig {
             params.model_provider = self.explicit_model_provider(&config);
         }
+        let target = (
+            codex_app_server_protocol::ModelContextIntent::Resume,
+            Some(thread_id),
+        );
+        if self.pending_model_target != Some(target) || self.pending_model_context.is_none() {
+            if model_settings == ResumeModelSettings::OverrideFromCurrentConfig {
+                self.ensure_model_context(&config, target.0, target.1)
+                    .await?;
+            } else {
+                self.ensure_inherited_model_context(&config, target.0, target.1)
+                    .await?;
+            }
+        }
+        if let Some(context) = &self.pending_model_context {
+            params.model_context_id = Some(context.model_context_id.clone());
+            params.model = None;
+            params.model_provider = None;
+            params.cwd = None;
+            super::model_context::remove_model_choices(&mut params.config);
+        }
         self.thread_tool_transport()
             .configure_mcp(&mut params.config);
         let mut rollout_maintenance_guard = None;
@@ -236,6 +256,7 @@ impl AppServerSession {
                 ));
             }
         };
+        self.clear_pending_model_context();
         self.hydrate_initial_thread_history(
             &mut response.thread,
             response.turns_backwards_cursor.clone(),

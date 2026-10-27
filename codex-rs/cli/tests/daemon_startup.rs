@@ -16,6 +16,18 @@ async fn auto_daemon_start_attaches_to_shared_server() -> Result<()> {
 
 #[tokio::test]
 #[cfg(unix)]
+async fn mixed_provider_flags_attach_to_the_existing_shared_server() -> Result<()> {
+    daemon_startup("mixed-provider").await
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn profile_launch_preserves_the_explicit_model_flag() -> Result<()> {
+    daemon_startup("profile-model").await
+}
+
+#[tokio::test]
+#[cfg(unix)]
 async fn agents_can_offer_restart_for_managed_daemon() -> Result<()> {
     daemon_startup("agents").await
 }
@@ -199,6 +211,51 @@ async fn daemon_startup(command: &str) -> Result<()> {
             },
         ),
     )?;
+    if matches!(command, "mixed-provider" | "profile-model") {
+        let mut model = codex_models_manager::bundled_models_response()?
+            .models
+            .remove(0);
+        model.slug = "k3.1-pro".to_string();
+        model.display_name = "k3.1-pro".to_string();
+        model.supported_in_api = true;
+        model.visibility = codex_protocol::openai_models::ModelVisibility::List;
+        model.upgrade = None;
+        model.availability_nux = None;
+        fs::write(
+            home.path().join("models_kimi.json"),
+            serde_json::to_vec(&codex_protocol::openai_models::ModelsResponse {
+                models: if command == "profile-model" {
+                    let mut default_model = model.clone();
+                    default_model.slug = "profile-default-model".into();
+                    default_model.display_name = "profile-default-model".into();
+                    vec![default_model, model]
+                } else {
+                    vec![model]
+                },
+            })?,
+        )?;
+        let config = fs::read_to_string(home.path().join("config.toml"))?;
+        fs::write(
+            home.path().join("config.toml"),
+            format!(
+                "features.code_mode = false\nfeatures.code_mode_host = false\nfeatures.api_key_model_discovery = false\n{config}\n[model_providers.kimi]\nname = \"Kimi fixture\"\nbase_url = \"http://127.0.0.1:1/v1\"\nwire_api = \"responses\"\n"
+            ),
+        )?;
+    }
+    if command == "profile-model" {
+        let config = fs::read_to_string(home.path().join("config.toml"))?.replacen(
+            "model = \"gpt-5.6-terra\"",
+            "model = \"profile-default-model\"",
+            1,
+        );
+        fs::write(
+            home.path().join("work.config.toml"),
+            format!(
+                "model_provider = \"kimi\"\nmodel_catalog_json = {}\n{config}",
+                serde_json::to_string(&home.path().join("models_kimi.json").display().to_string())?
+            ),
+        )?;
+    }
     let mismatch = command.starts_with("mismatch-");
     let persisted = command == "mismatch-disable-persisted";
     let disabling = matches!(command, "mismatch-disable" | "mismatch-disable-persisted");
@@ -234,6 +291,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
     if matches!(
         command,
         "start"
+            | "mixed-provider"
             | "agents"
             | "agents-untrusted"
             | "agents-untrusted-new"
@@ -268,7 +326,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
     }
     let pid_file = home.path().join("app-server-daemon/daemon.pid");
     let result = async {
-        let mut existing_daemon = if matches!(command, "bedrock-running" | "discovered")
+        let mut existing_daemon = if matches!(command, "bedrock-running" | "discovered" | "mixed-provider")
             || (mismatch && !disabling)
         {
             let started = Command::new(&codex)
@@ -286,7 +344,19 @@ async fn daemon_startup(command: &str) -> Result<()> {
         } else {
             None
         };
-        let expected = if command == "start" {
+        let expected = if command == "profile-model" {
+            args.extend(["--profile".into(), "work".into(), "-m".into(), "k3.1-pro".into()]);
+            steps.push_back(("k3.1-pro", b"/rename profile-model-check\r"));
+            steps.push_back(("·profile-model-check", b"/status\r"));
+            "Model:"
+        } else if command == "mixed-provider" {
+            args.extend(["-c".into(), "model_provider=\"kimi\"".into(), "-c".into(),
+                format!("model_catalog_json={}", serde_json::to_string(&home.path().join("models_kimi.json").display().to_string())?),
+                "-m".into(), "k3.1-pro".into()]);
+            steps.push_back(("k3.1-pro", b"/rename mixed-provider-check\r"));
+            steps.push_back(("·mixed-provider-check", b"/status\r"));
+            "Server:Localbackgroundserver"
+        } else if command == "start" {
             // The draft header is visible before the session's command composer is ready.
             steps.push_back(("GPT-5.6-Terra", b"/status\r"));
             "Server:Localbackgroundserver"
@@ -439,7 +509,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
                 }
                 // PTY reads can split a redraw after the reconnect notice is erased but
                 // before it is repainted. Only inspect completed synchronized updates.
-                if command == "discovered"
+                if matches!(command, "discovered" | "mixed-provider" | "profile-model")
                     && output
                         .rfind("\x1b[?2026l")
                         .is_none_or(|end| output[end..].contains("\x1b[?2026h"))
@@ -536,6 +606,13 @@ async fn daemon_startup(command: &str) -> Result<()> {
                                 assert_eq!(settings["featureOverrides"], serde_json::json!({(flag): false}));
                             }
                         }
+                    } else if command == "profile-model" {
+                        ensure!(text.contains("k3.1-pro"), "profile model status: {}", screen.screen().contents());
+                        ensure!(!pid_file.exists(), "profile launches use the embedded server");
+                    } else if command == "mixed-provider" {
+                        ensure!(text.contains("Server:Localbackgroundserver"));
+                        ensure!(text.contains("k3.1-pro"), "mixed-provider status: {}", screen.screen().contents());
+                        ensure!(fs::read(&pid_file)? == *existing_daemon.as_ref().context("missing original daemon PID")?);
                     } else if command == "start" {
                         ensure!(text.contains("Server:Localbackgroundserver"));
                         ensure!(home.path().join("app-server-daemon/daemon.pid").exists());

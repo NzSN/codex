@@ -379,11 +379,10 @@ impl MessageProcessor {
                     outgoing.clone(),
                     thread_state_manager.clone(),
                 )),
-                Some({
-                    let time_provider =
-                        app_server_time_provider(outgoing.clone(), thread_state_manager.clone());
-                    time_provider
-                }),
+                Some(app_server_time_provider(
+                    outgoing.clone(),
+                    thread_state_manager.clone(),
+                )),
             );
             match code_mode_session_provider {
                 Some(provider) => manager.with_code_mode_session_provider(provider),
@@ -1293,11 +1292,32 @@ impl MessageProcessor {
                 .unwatch(connection_id, params)
                 .await
                 .map(|response| Some(response.into())),
-            ClientRequest::ModelProviderCapabilitiesRead { .. } => self
-                .config_processor
-                .model_provider_capabilities_read()
+            ClientRequest::ModelContextResolve { params, .. } => self
+                .thread_processor
+                .resolve_model_context(
+                    connection_id,
+                    matches!(
+                        session.origin,
+                        crate::transport::ConnectionOrigin::Stdio
+                            | crate::transport::ConnectionOrigin::InProcess
+                            | crate::transport::ConnectionOrigin::LocalSocket
+                    ),
+                    params,
+                )
                 .await
                 .map(|response| Some(response.into())),
+            ClientRequest::ModelProviderCapabilitiesRead { params, .. } => {
+                let response = if params.model_context_id.is_none() && params.thread_id.is_none() {
+                    self.config_processor
+                        .model_provider_capabilities_read()
+                        .await?
+                } else {
+                    self.catalog_processor
+                        .model_provider_capabilities_read_scoped(connection_id, params)
+                        .await?
+                };
+                Ok(Some(response.into()))
+            }
             ClientRequest::ThreadStart { params, .. } => {
                 self.thread_processor
                     .thread_start(
@@ -1654,7 +1674,9 @@ impl MessageProcessor {
                 self.plugin_processor.plugin_uninstall(params).await
             }
             ClientRequest::ModelList { params, .. } => {
-                self.catalog_processor.model_list(params).await
+                self.catalog_processor
+                    .model_list(connection_id, params)
+                    .await
             }
             ClientRequest::ExperimentalFeatureList { params, .. } => {
                 self.catalog_processor

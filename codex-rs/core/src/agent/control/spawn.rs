@@ -4,6 +4,7 @@ use super::spawn_telemetry::SpawnMeasurements;
 use super::spawn_telemetry::record_spawn_success;
 use super::*;
 use crate::agent::child_config::build_agent_resume_config;
+use crate::agent::role::apply_role_preserving_model_context;
 use crate::agent::role::apply_role_to_config;
 use crate::agent::types::AgentMetadata;
 use crate::agent::types::LiveAgent;
@@ -427,6 +428,33 @@ impl LocalAgentControl {
         } else {
             None
         };
+        let owned_settings = initial_history
+            .get_rollout_items()
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
+                    if event.thread_id == Some(thread_id)
+                        && event.thread_settings.model_context.is_some() =>
+                {
+                    Some(&event.thread_settings)
+                }
+                _ => None,
+            });
+        let restored_model_context = if let Some(settings) = owned_settings {
+            if let Some(snapshot) = settings.model_context.clone() {
+                state.restore_model_context(&mut config, snapshot)?;
+            }
+            true
+        } else {
+            false
+        };
+        let stored_model = owned_settings
+            .map(|settings| settings.model.clone())
+            .or(stored_model);
+        let stored_model_provider = owned_settings
+            .map(|settings| settings.model_provider_id.clone())
+            .unwrap_or(stored_model_provider);
         config.model_reasoning_effort = stored_reasoning_effort;
         if let Some(role_name) = session_source.get_agent_role() {
             let runtime_approval_policy = config.permissions.approval_policy.value();
@@ -445,9 +473,12 @@ impl LocalAgentControl {
                 ),
             };
 
-            apply_role_to_config(&mut config, Some(&role_name))
-                .await
-                .map_err(CodexErr::InvalidRequest)?;
+            if restored_model_context {
+                apply_role_preserving_model_context(&mut config, Some(&role_name)).await
+            } else {
+                apply_role_to_config(&mut config, Some(&role_name)).await
+            }
+            .map_err(CodexErr::InvalidRequest)?;
             config
                 .permissions
                 .approval_policy

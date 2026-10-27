@@ -1053,8 +1053,12 @@ pub struct Config {
     pub model_reasoning_summary: Option<ReasoningSummary>,
 
     /// Optional full model catalog loaded from `model_catalog_json`.
-    /// When set, this replaces the bundled catalog for the current process.
+    /// Resolved model contexts bind this catalog to an individual session; legacy callers
+    /// retain the models manager selected at host startup.
     pub model_catalog: Option<ModelsResponse>,
+
+    /// Session-owned provider and catalog binding; never loaded from caller TOML.
+    pub resolved_model_context: Option<Arc<crate::model_context::ResolvedModelContext>>,
 
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
@@ -2709,6 +2713,12 @@ fn resolve_permission_config_syntax(
 /// Optional overrides for user configuration (e.g., from CLI flags).
 #[derive(Default, Debug, Clone)]
 pub struct ConfigOverrides {
+    /// Host-side metadata resolution may defer user catalog I/O until a thread is selected.
+    pub defer_model_catalog: bool,
+    /// Trusted validated snapshot; outer Some also represents a provider with no static catalog.
+    pub model_catalog_snapshot: Option<Option<ModelsResponse>>,
+    /// Trusted host-resolved provider/catalog binding, not accepted from TOML.
+    pub model_context: Option<Arc<crate::model_context::ResolvedModelContext>>,
     pub model: Option<String>,
     pub review_model: Option<String>,
     pub cwd: Option<PathBuf>,
@@ -3449,6 +3459,9 @@ impl Config {
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
+            defer_model_catalog,
+            model_catalog_snapshot,
+            model_context,
             model,
             review_model: override_review_model,
             cwd,
@@ -4251,7 +4264,37 @@ impl Config {
         let review_model = override_review_model.or(cfg.review_model);
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
-        let model_catalog = load_model_catalog(cfg.model_catalog_json.clone())?;
+        let model_catalog = if let Some(context) = &model_context {
+            if context.snapshot.provider_id != model_provider_id
+                || context.snapshot.route_fingerprint
+                    != crate::model_context::route_fingerprint(&model_provider_id, &model_provider)?
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "model context provider route changed; resolve it again",
+                ));
+            }
+            if config_layer_stack.requirements().model_catalog_json.is_some() {
+                let required = load_model_catalog(cfg.model_catalog_json.clone())?;
+                if required != context.snapshot.catalog {
+                    return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied,
+                        "resolved model catalog no longer satisfies managed requirements"));
+                }
+            }
+            context.snapshot.catalog.clone()
+        } else if let Some(snapshot) = model_catalog_snapshot {
+            if config_layer_stack.requirements().model_catalog_json.is_some()
+                && load_model_catalog(cfg.model_catalog_json.clone())? != snapshot
+            {
+                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied,
+                    "saved model catalog no longer satisfies managed requirements"));
+            }
+            snapshot
+        } else if defer_model_catalog && config_layer_stack.requirements().model_catalog_json.is_none() {
+            None
+        } else {
+            load_model_catalog(cfg.model_catalog_json.clone())?
+        };
 
         let log_dir = cfg
             .log_dir
@@ -4608,6 +4651,7 @@ impl Config {
             plan_mode_reasoning_effort: cfg.plan_mode_reasoning_effort,
             model_reasoning_summary: cfg.model_reasoning_summary,
             model_catalog,
+            resolved_model_context: model_context,
             model_verbosity: cfg.model_verbosity,
             chatgpt_base_url: cfg
                 .chatgpt_base_url

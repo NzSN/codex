@@ -2801,6 +2801,55 @@ class ModelAvailabilityNux(BaseModel):
     message: str
 
 
+class ModelContextCapabilities(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    image_generation: Annotated[bool, Field(alias="imageGeneration")]
+    web_search: Annotated[bool, Field(alias="webSearch")]
+
+
+class ModelContextInfo(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    catalog_digest: Annotated[str | None, Field(alias="catalogDigest")] = None
+    catalog_source: Annotated[str | None, Field(alias="catalogSource")] = None
+    model_provider: Annotated[str, Field(alias="modelProvider")]
+    version: Annotated[int, Field(ge=0)]
+
+
+class ModelContextIntent(Enum):
+    start = "start"
+    resume = "resume"
+    fork = "fork"
+
+
+class ModelContextResolveParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    cwd: str | None = None
+    intent: ModelContextIntent | None = "start"
+    model: str | None = None
+    model_catalog_json: Annotated[str | None, Field(alias="modelCatalogJson")] = None
+    model_provider: Annotated[str | None, Field(alias="modelProvider")] = None
+    thread_id: Annotated[str | None, Field(alias="threadId")] = None
+
+
+class ModelContextResolveResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    capabilities: ModelContextCapabilities
+    context: ModelContextInfo
+    model: str
+    model_context_id: Annotated[str, Field(alias="modelContextId")]
+    model_provider: Annotated[str, Field(alias="modelProvider")]
+    requires_openai_auth: Annotated[bool, Field(alias="requiresOpenaiAuth")]
+    warnings: list[str]
+
+
 class ModelListParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -2819,13 +2868,16 @@ class ModelListParams(BaseModel):
         int | None,
         Field(description="Optional page size; defaults to a reasonable server-side value.", ge=0),
     ] = None
+    model_context_id: Annotated[str | None, Field(alias="modelContextId")] = None
+    thread_id: Annotated[str | None, Field(alias="threadId")] = None
 
 
 class ModelProviderCapabilitiesReadParams(BaseModel):
-    pass
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    model_context_id: Annotated[str | None, Field(alias="modelContextId")] = None
+    thread_id: Annotated[str | None, Field(alias="threadId")] = None
 
 
 class ModelProviderCapabilitiesReadResponse(BaseModel):
@@ -6105,6 +6157,7 @@ class ThreadResumeParams(BaseModel):
     model: Annotated[
         str | None, Field(description="Configuration overrides for the resumed thread, if any.")
     ] = None
+    model_context_id: Annotated[str | None, Field(alias="modelContextId")] = None
     model_provider: Annotated[str | None, Field(alias="modelProvider")] = None
     personality: Annotated[
         Personality | None,
@@ -7608,6 +7661,17 @@ class AccountGatewayOAuthCancelRequest(BaseModel):
         Field(title="Account/gatewayOAuth/cancelRequestMethod"),
     ]
     params: None = None
+
+
+class ModelContextResolveRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["modelContext/resolve"], Field(title="ModelContext/resolveRequestMethod")
+    ]
+    params: ModelContextResolveParams
 
 
 class ModelProviderCapabilitiesReadRequest(BaseModel):
@@ -10061,6 +10125,7 @@ class ThreadForkParams(BaseModel):
     model: Annotated[
         str | None, Field(description="Configuration overrides for the forked thread, if any.")
     ] = None
+    model_context_id: Annotated[str | None, Field(alias="modelContextId")] = None
     model_provider: Annotated[str | None, Field(alias="modelProvider")] = None
     sandbox: SandboxMode | None = None
     service_tier: Annotated[str | None, Field(alias="serviceTier")] = None
@@ -10576,6 +10641,7 @@ class ThreadStartParams(BaseModel):
     developer_instructions: Annotated[str | None, Field(alias="developerInstructions")] = None
     ephemeral: bool | None = None
     model: str | None = None
+    model_context_id: Annotated[str | None, Field(alias="modelContextId")] = None
     model_provider: Annotated[str | None, Field(alias="modelProvider")] = None
     personality: Annotated[
         Personality | None,
@@ -12548,6 +12614,7 @@ class ThreadForkResponse(BaseModel):
         ),
     ] = []
     model: str
+    model_context: Annotated[ModelContextInfo | None, Field(alias="modelContext")] = None
     model_provider: Annotated[str, Field(alias="modelProvider")]
     reasoning_effort: Annotated[ReasoningEffort | None, Field(alias="reasoningEffort")] = None
     sandbox: Annotated[
@@ -12637,6 +12704,7 @@ class ThreadResumeResponse(BaseModel):
         ),
     ] = None
     model: str
+    model_context: Annotated[ModelContextInfo | None, Field(alias="modelContext")] = None
     model_provider: Annotated[str, Field(alias="modelProvider")]
     reasoning_effort: Annotated[ReasoningEffort | None, Field(alias="reasoningEffort")] = None
     sandbox: Annotated[
@@ -12718,6 +12786,7 @@ class ThreadStartResponse(BaseModel):
         ),
     ] = []
     model: str
+    model_context: Annotated[ModelContextInfo | None, Field(alias="modelContext")] = None
     model_provider: Annotated[str, Field(alias="modelProvider")]
     reasoning_effort: Annotated[ReasoningEffort | None, Field(alias="reasoningEffort")] = None
     sandbox: Annotated[
@@ -12972,6 +13041,7 @@ class ClientRequest(
         | AccountGatewayOAuthReadRequest
         | AccountGatewayOAuthLoginRequest
         | AccountGatewayOAuthCancelRequest
+        | ModelContextResolveRequest
         | ModelProviderCapabilitiesReadRequest
         | ExperimentalFeatureListRequest
         | PermissionProfileListRequest
@@ -13084,6 +13154,7 @@ class ClientRequest(
         | AccountGatewayOAuthReadRequest
         | AccountGatewayOAuthLoginRequest
         | AccountGatewayOAuthCancelRequest
+        | ModelContextResolveRequest
         | ModelProviderCapabilitiesReadRequest
         | ExperimentalFeatureListRequest
         | PermissionProfileListRequest

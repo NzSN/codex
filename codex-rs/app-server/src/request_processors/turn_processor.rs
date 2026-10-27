@@ -220,6 +220,16 @@ impl TurnRequestProcessor {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
         self.ensure_direct_input_allowed(request_id, thread.as_ref())
             .await?;
+        self.config_manager
+            .check_thread_model_provider(thread.config().await.as_ref())
+            .await
+            .map_err(|error| config_load_error(&error))?;
+        crate::model_context::validate_model_selection(
+            thread.config().await.as_ref(),
+            params.model.as_deref(),
+            None,
+        )
+        .await?;
         let (reply, outcome) = oneshot::channel();
         self.submit_core_op(
             request_id,
@@ -541,6 +551,15 @@ impl TurnRequestProcessor {
             .check_thread_model_provider(thread.config().await.as_ref())
             .await
             .map_err(|error| config_load_error(&error))?;
+        crate::model_context::validate_model_selection(
+            thread.config().await.as_ref(),
+            params.model.as_deref(),
+            params
+                .collaboration_mode
+                .as_ref()
+                .map(codex_protocol::config_types::CollaborationMode::model),
+        )
+        .await?;
         if let Some(tool_output) = &params.tool_output {
             if !params.input.is_empty() {
                 return Err(invalid_request(
@@ -946,6 +965,19 @@ impl TurnRequestProcessor {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
         self.ensure_direct_input_allowed(request_id, thread.as_ref())
             .await?;
+        self.config_manager
+            .check_thread_model_provider(thread.config().await.as_ref())
+            .await
+            .map_err(|error| config_load_error(&error))?;
+        crate::model_context::validate_model_selection(
+            thread.config().await.as_ref(),
+            params.model.as_deref(),
+            params
+                .collaboration_mode
+                .as_ref()
+                .map(codex_protocol::config_types::CollaborationMode::model),
+        )
+        .await?;
         let cwd = resolve_request_cwd(params.cwd)?;
         let environment_override = self
             .build_environment_override(

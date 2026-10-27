@@ -112,6 +112,29 @@ impl PidBackend {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::from(stderr_log.into_std().await));
+        if matches!(self.command_kind, super::PidCommandKind::AppServer { .. }) {
+            let codex_home = self
+                .pid_file
+                .parent()
+                .and_then(std::path::Path::parent)
+                .context("daemon pid path has no Codex home")?;
+            let requirement =
+                codex_home.join(codex_protocol::model_context::STORE_REQUIREMENT_FILE);
+            match fs::read_to_string(requirement).await {
+                Ok(version) => {
+                    anyhow::ensure!(
+                        version.trim() == "1",
+                        "unsupported model-context store version"
+                    );
+                    // An older binary rejects this required flag instead of ignoring durable contexts.
+                    command.args(["--required-model-context-version", "1"]);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).context("read model-context store reader requirement");
+                }
+            }
+        }
         // Older or pinned managed binaries may predate this optional startup flag.
         let managed_app_server =
             matches!(self.command_kind, super::PidCommandKind::AppServer { .. });

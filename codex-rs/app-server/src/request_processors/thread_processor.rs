@@ -1,3 +1,12 @@
+#[path = "thread_model_context.rs"]
+mod thread_model_context;
+use crate::model_context::PendingModelContext;
+use codex_app_server_protocol::ModelContextIntent;
+use thread_model_context::apply_pending_model_context;
+use thread_model_context::attach_model_context;
+use thread_model_context::restore_persisted_model_context;
+use thread_model_context::validate_loaded_resume_context;
+
 #[path = "daemon_continuation.rs"]
 mod daemon_continuation;
 
@@ -100,11 +109,17 @@ struct ThreadListFilters {
 // Persisted inputs that can change while loading configuration without the metadata permit.
 #[derive(PartialEq)]
 struct ResumeConfigState {
+    model_context: Option<codex_protocol::model_context::ModelContextSnapshot>,
     history_cwd: Option<PathBuf>,
     workspace_roots: Option<Vec<AbsolutePathBuf>>,
     persisted_metadata: Option<ThreadMetadata>,
     persisted_settings: Option<PersistedResumeSettings>,
     persisted_permission_profile: Option<PermissionProfile>,
+}
+
+struct ResumeAttempt {
+    prepared_config: Option<PreparedResumeConfig>,
+    model_context: Option<PendingModelContext>,
 }
 
 struct PreparedResumeConfig {
@@ -578,7 +593,34 @@ impl ThreadRequestProcessor {
         app_server_client_version: Option<String>,
         client_mcp_extensions: ClientMcpExtensions,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let mut prepared_config = None;
+        if params.model_context_id.is_some() && (params.path.is_some() || params.history.is_some())
+        {
+            return Err(crate::model_context::context_error(
+                "modelContextConflict",
+                "a resolved resume context requires threadId without path or supplied history",
+            ));
+        }
+        let pending_context = if let (Some(id), ThreadResumeTarget::Client(request)) =
+            (params.model_context_id.as_deref(), &target)
+        {
+            self.pending_model_context(
+                request,
+                Some(id),
+                ModelContextIntent::Resume,
+                Some(&params.thread_id),
+                params.model.as_deref(),
+                params.model_provider.as_deref(),
+                params.config.as_ref(),
+                params.cwd.as_deref(),
+            )
+            .await?
+        } else {
+            None
+        };
+        let mut attempt = ResumeAttempt {
+            prepared_config: None,
+            model_context: pending_context,
+        };
         // Keep the resume future off the request handler's stack.
         while Box::pin(self.thread_resume_inner(
             &target,
@@ -586,7 +628,7 @@ impl ThreadRequestProcessor {
             app_server_client_name.clone(),
             app_server_client_version.clone(),
             client_mcp_extensions.clone(),
-            &mut prepared_config,
+            &mut attempt,
         ))
         .await?
         .is_continue()
@@ -602,6 +644,12 @@ impl ThreadRequestProcessor {
         app_server_client_version: Option<String>,
         client_mcp_extensions: ClientMcpExtensions,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        if params.model_context_id.is_some() && params.path.is_some() {
+            return Err(crate::model_context::context_error(
+                "modelContextConflict",
+                "a resolved fork context requires threadId without a path override",
+            ));
+        }
         // Keep the large fork future out of the shared request dispatcher's stack frame.
         Box::pin(self.thread_fork_inner(
             request_id,
@@ -610,8 +658,8 @@ impl ThreadRequestProcessor {
             app_server_client_version,
             client_mcp_extensions,
         ))
-        .await
-        .map(|()| None)
+        .await?;
+        Ok(None)
     }
 
     pub(crate) async fn thread_sample(
@@ -1190,7 +1238,23 @@ impl ThreadRequestProcessor {
         client_mcp_extensions: ClientMcpExtensions,
         request_context: RequestContext,
     ) -> Result<(), JSONRPCErrorError> {
+        let pending_context = self
+            .pending_model_context(
+                &request_id,
+                params.model_context_id.as_deref(),
+                ModelContextIntent::Start,
+                None,
+                params
+                    .model
+                    .as_deref()
+                    .filter(|_| !params.allow_provider_model_fallback),
+                params.model_provider.as_deref(),
+                params.config.as_ref(),
+                params.cwd.as_deref(),
+            )
+            .await?;
         let ThreadStartParams {
+            model_context_id: _,
             model,
             model_provider,
             allow_provider_model_fallback,
@@ -1268,6 +1332,7 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
         );
+        apply_pending_model_context(&mut typesafe_overrides, pending_context.as_ref());
         typesafe_overrides.ephemeral = ephemeral;
         let listener_task_context = ListenerTaskContext {
             thread_manager: Arc::clone(&self.thread_manager),
@@ -1294,6 +1359,7 @@ impl ThreadRequestProcessor {
                 app_server_client_name,
                 app_server_client_version,
                 client_mcp_extensions,
+                pending_context,
                 config,
                 typesafe_overrides,
                 dynamic_tools,
@@ -1376,6 +1442,7 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         client_mcp_extensions: ClientMcpExtensions,
+        pending_context: Option<PendingModelContext>,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<DynamicToolSpec>>,
@@ -1393,7 +1460,12 @@ impl ThreadRequestProcessor {
         initial_config_warnings: Arc<Vec<ConfigWarningNotification>>,
     ) -> Result<(), JSONRPCErrorError> {
         let thread_start_started_at = std::time::Instant::now();
-        let requested_cwd = typesafe_overrides.cwd.clone();
+        let requested_cwd = if typesafe_overrides.model_context.is_some() {
+            // Resolving model metadata does not imply consent to persist project trust.
+            None
+        } else {
+            typesafe_overrides.cwd.clone()
+        };
         let mut config = config_manager
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
             .await
@@ -1549,32 +1621,54 @@ impl ThreadRequestProcessor {
             .try_add_connection_to_thread(thread_id, request_id.connection_id)
             .await;
         let create_thread_started_at = std::time::Instant::now();
-        let new_thread = listener_task_context
-            .thread_manager
-            .start_thread(StartThreadOptions {
-                allow_provider_model_fallback,
-                initial_history: match session_start_source
-                    .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
-                {
-                    codex_app_server_protocol::ThreadStartSource::Startup => InitialHistory::New,
-                    codex_app_server_protocol::ThreadStartSource::Clear => InitialHistory::Cleared,
-                },
-                history_mode,
-                thread_source,
-                dynamic_tools,
-                metrics_service_name: service_name,
-                parent_trace: request_trace,
-                environments: Some(environment_requests),
-                thread_extension_init,
-                client_mcp_extensions,
-                ..start_options
-            })
-            .instrument(tracing::info_span!(
-                "app_server.thread_start.create_thread",
-                otel.name = "app_server.thread_start.create_thread",
-                thread_start.dynamic_tool_count = dynamic_tool_count,
-            ))
-            .await;
+        let new_thread = attach_model_context(
+            &config_manager,
+            pending_context.as_ref(),
+            listener_task_context.thread_manager.as_ref(),
+            Box::pin(
+                listener_task_context
+                    .thread_manager
+                    .start_thread(StartThreadOptions {
+                        allow_provider_model_fallback,
+                        initial_history: match session_start_source
+                            .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
+                        {
+                            codex_app_server_protocol::ThreadStartSource::Startup => {
+                                InitialHistory::New
+                            }
+                            codex_app_server_protocol::ThreadStartSource::Clear => {
+                                InitialHistory::Cleared
+                            }
+                        },
+                        history_mode,
+                        thread_source,
+                        dynamic_tools,
+                        metrics_service_name: service_name,
+                        parent_trace: request_trace,
+                        environments: Some(environment_requests),
+                        thread_extension_init,
+                        client_mcp_extensions,
+                        ..start_options
+                    })
+                    .instrument(tracing::info_span!(
+                        "app_server.thread_start.create_thread",
+                        otel.name = "app_server.thread_start.create_thread",
+                        thread_start.dynamic_tool_count = dynamic_tool_count,
+                    )),
+            ),
+        )
+        .await;
+        let new_thread = match new_thread {
+            Ok(result) => result,
+            Err(error) => {
+                listener_task_context
+                    .thread_state_manager
+                    .remove_thread_state(thread_id)
+                    .await;
+                remove_pending_thread_metadata(thread_store.as_ref(), reserved_thread_id).await;
+                return Err(error);
+            }
+        };
         let NewThread {
             thread_id,
             thread,
@@ -1611,6 +1705,12 @@ impl ThreadRequestProcessor {
         )
         .await?;
 
+        let model_context_info = thread
+            .config()
+            .await
+            .resolved_model_context
+            .as_ref()
+            .map(|context| codex_app_server_protocol::ModelContextInfo::from(&context.snapshot));
         let instruction_sources = thread.legacy_instruction_sources().await;
         let config_snapshot = thread
             .config_snapshot()
@@ -1676,6 +1776,7 @@ impl ThreadRequestProcessor {
         let thread_originator = config_snapshot.originator.clone();
 
         let response = ThreadStartResponse {
+            model_context: model_context_info,
             thread: thread.clone(),
             disabled_plugin_ids: config_snapshot.disabled_plugin_ids,
             model: config_snapshot.model,
@@ -3800,12 +3901,20 @@ impl ThreadRequestProcessor {
         connection_id: ConnectionId,
         capabilities: ConnectionCapabilities,
     ) {
+        self.config_manager
+            .model_contexts
+            .connect(connection_id)
+            .await;
         self.thread_state_manager
             .connection_initialized(connection_id, capabilities)
             .await;
     }
 
     pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
+        self.config_manager
+            .model_contexts
+            .disconnect(connection_id)
+            .await;
         let thread_ids = self
             .thread_state_manager
             .remove_connection(connection_id)
@@ -3907,8 +4016,13 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         client_mcp_extensions: ClientMcpExtensions,
-        prepared_config: &mut Option<PreparedResumeConfig>,
+        attempt: &mut ResumeAttempt,
     ) -> Result<ControlFlow<()>, JSONRPCErrorError> {
+        let ResumeAttempt {
+            prepared_config,
+            model_context,
+        } = attempt;
+        let pending_context = model_context.as_ref();
         if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
             && self
                 .pending_thread_unloads
@@ -3930,6 +4044,19 @@ impl ThreadRequestProcessor {
             should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
         let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        if let Some(context) = pending_context {
+            self.config_manager
+                .model_contexts
+                .validate_attachment(context, || self.model_context_owner_generation())
+                .await?;
+            validate_loaded_resume_context(
+                self.thread_manager.as_ref(),
+                &params.thread_id,
+                context,
+                params.model.as_deref(),
+            )
+            .await?;
+        }
         let stored_thread_from_running_probe = match target {
             ThreadResumeTarget::Client(request_id) => match self
                 .resume_running_thread(
@@ -3965,6 +4092,7 @@ impl ThreadRequestProcessor {
         };
 
         let ThreadResumeParams {
+            model_context_id: _,
             thread_id,
             history,
             path,
@@ -4183,6 +4311,7 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
         );
+        apply_pending_model_context(&mut typesafe_overrides, pending_context);
         if typesafe_overrides.approval_policy.is_none()
             && let Some(value) = request_overrides
                 .as_mut()
@@ -4192,6 +4321,15 @@ impl ThreadRequestProcessor {
                 invalid_params(format!("invalid `approval_policy` config override: {err}"))
             })?;
             typesafe_overrides.approval_policy = Some(approval_policy);
+        }
+        if let InitialHistory::Resumed(history) = &thread_history {
+            restore_persisted_model_context(
+                &mut typesafe_overrides,
+                &history.history,
+                history.conversation_id,
+                self.config.codex_home.as_path(),
+                request_overrides.as_ref(),
+            )?;
         }
         let has_explicit_model_resume_override =
             has_model_resume_override(request_overrides.as_ref(), &typesafe_overrides);
@@ -4203,6 +4341,9 @@ impl ThreadRequestProcessor {
         };
         let restore_service_tier =
             typesafe_overrides.service_tier.is_none() && !has_override("service_tier");
+        let restore_context_effort = (typesafe_overrides.model_context.is_some()
+            || typesafe_overrides.model_catalog_snapshot.is_some())
+            && !has_override("model_reasoning_effort");
         let restore_summary = !has_override("model_reasoning_summary");
         let restore_personality =
             typesafe_overrides.personality.is_none() && !has_override("personality");
@@ -4241,6 +4382,8 @@ impl ThreadRequestProcessor {
                 .as_ref()
                 .is_some_and(|metadata| metadata.reasoning_effort.is_none());
         let config_state = ResumeConfigState {
+            model_context: persisted_model_settings
+                .and_then(|settings| settings.model_context.clone()),
             history_cwd: history_cwd.clone(),
             workspace_roots: typesafe_overrides.workspace_roots.clone(),
             persisted_metadata,
@@ -4270,6 +4413,9 @@ impl ThreadRequestProcessor {
             config.model_reasoning_effort = None;
         }
         if let Some(settings) = persisted_model_settings {
+            if restore_context_effort && settings.model_provider_id == config.model_provider_id {
+                config.model_reasoning_effort = settings.reasoning_effort.clone();
+            }
             if restore_service_tier {
                 config.service_tier.clone_from(&settings.service_tier);
             }
@@ -4282,9 +4428,11 @@ impl ThreadRequestProcessor {
         }
         let response_history = thread_history.clone();
 
-        match self
-            .thread_manager
-            .start_thread(StartThreadOptions {
+        match attach_model_context(
+            &self.config_manager,
+            pending_context,
+            self.thread_manager.as_ref(),
+            Box::pin(self.thread_manager.start_thread(StartThreadOptions {
                 initial_history: thread_history,
                 parent_trace: match target {
                     ThreadResumeTarget::Client(request_id) => {
@@ -4294,8 +4442,9 @@ impl ThreadRequestProcessor {
                 },
                 client_mcp_extensions,
                 ..StartThreadOptions::new(config)
-            })
-            .await
+            })),
+        )
+        .await?
         {
             Ok(NewThread {
                 thread_id,
@@ -4483,6 +4632,14 @@ impl ThreadRequestProcessor {
 
                 let thread_originator = config_snapshot.originator.clone();
                 let response = ThreadResumeResponse {
+                    model_context: codex_thread
+                        .config()
+                        .await
+                        .resolved_model_context
+                        .as_ref()
+                        .map(|context| {
+                            codex_app_server_protocol::ModelContextInfo::from(&context.snapshot)
+                        }),
                     thread,
                     disabled_plugin_ids: config_snapshot.disabled_plugin_ids,
                     model: session_configured.model,
@@ -5179,12 +5336,25 @@ impl ThreadRequestProcessor {
         app_server_client_version: Option<String>,
         client_mcp_extensions: ClientMcpExtensions,
     ) -> Result<(), JSONRPCErrorError> {
+        let pending_context = self
+            .pending_model_context(
+                &request_id,
+                params.model_context_id.as_deref(),
+                ModelContextIntent::Fork,
+                Some(&params.thread_id),
+                params.model.as_deref(),
+                params.model_provider.as_deref(),
+                params.config.as_ref(),
+                params.cwd.as_deref(),
+            )
+            .await?;
         if params.experimental_disable_prediction_mcp && !params.experimental_prediction_mode {
             return Err(invalid_request(
                 "`experimentalDisablePredictionMcp` requires `experimentalPredictionMode: true`",
             ));
         }
-        let has_config_overrides = params.model.is_some()
+        let has_config_overrides = params.model_context_id.is_some()
+            || params.model.is_some()
             || params.model_provider.is_some()
             || params.service_tier.is_some()
             || params.cwd.is_some()
@@ -5210,6 +5380,7 @@ impl ThreadRequestProcessor {
             ));
         }
         let ThreadForkParams {
+            model_context_id: _,
             thread_id,
             experimental_prediction_mode,
             experimental_disable_prediction_mcp,
@@ -5439,6 +5610,15 @@ impl ThreadRequestProcessor {
             developer_instructions,
             /*personality*/ None,
         );
+        apply_pending_model_context(&mut typesafe_overrides, pending_context.as_ref());
+        restore_persisted_model_context(
+            &mut typesafe_overrides,
+            &source_history_items,
+            source_thread_id,
+            self.config.codex_home.as_path(),
+            request_overrides.as_ref(),
+        )?;
+
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         let restore_approval_policy = typesafe_overrides.approval_policy.is_none();
         let restore_approvals_reviewer = typesafe_overrides.approvals_reviewer.is_none()
@@ -5610,23 +5790,39 @@ impl ThreadRequestProcessor {
             reserved_thread_id,
             ..options
         };
-        let new_thread = if let Some(prepared_fork) = prepared_fork {
-            self.thread_manager
-                .fork_prepared_thread(fork_options, prepared_fork)
-                .await
-        } else {
-            self.thread_manager
-                .fork_thread_from_history(
-                    ForkSnapshot::Interrupted,
-                    fork_options,
-                    InitialHistory::Resumed(ResumedHistory {
-                        history_revision: None,
-                        conversation_id: source_thread_id,
-                        history: history_items,
-                        rollout_path: source_thread.rollout_path.clone(),
-                    }),
-                )
-                .await
+        let new_thread = attach_model_context(
+            &self.config_manager,
+            pending_context.as_ref(),
+            self.thread_manager.as_ref(),
+            Box::pin(async {
+                if let Some(prepared_fork) = prepared_fork {
+                    self.thread_manager
+                        .fork_prepared_thread(fork_options, prepared_fork)
+                        .await
+                } else {
+                    self.thread_manager
+                        .fork_thread_from_history(
+                            ForkSnapshot::Interrupted,
+                            fork_options,
+                            InitialHistory::Resumed(ResumedHistory {
+                                history_revision: None,
+                                conversation_id: source_thread_id,
+                                history: history_items,
+                                rollout_path: source_thread.rollout_path.clone(),
+                            }),
+                        )
+                        .await
+                }
+            }),
+        )
+        .await;
+        let new_thread = match new_thread {
+            Ok(result) => result,
+            Err(error) => {
+                remove_pending_thread_metadata(self.thread_store.as_ref(), reserved_thread_id)
+                    .await;
+                return Err(error);
+            }
         };
         let NewThread {
             thread_id,
@@ -5801,6 +5997,14 @@ impl ThreadRequestProcessor {
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
         let thread_originator = config_snapshot.originator.clone();
         let response = ThreadForkResponse {
+            model_context: forked_thread
+                .config()
+                .await
+                .resolved_model_context
+                .as_ref()
+                .map(|context| {
+                    codex_app_server_protocol::ModelContextInfo::from(&context.snapshot)
+                }),
             thread: thread.clone(),
             disabled_plugin_ids: config_snapshot.disabled_plugin_ids,
             model: config_snapshot.model.clone(),

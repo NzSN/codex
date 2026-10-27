@@ -38,7 +38,14 @@ v2_enum_from_core!(
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ModelProviderCapabilitiesReadParams {}
+pub struct ModelProviderCapabilitiesReadParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub model_context_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -52,6 +59,12 @@ pub struct ModelProviderCapabilitiesReadResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ModelListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub model_context_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
     /// Opaque pagination cursor returned by a previous call.
     #[ts(optional = nullable)]
     pub cursor: Option<String>,
@@ -221,4 +234,75 @@ pub struct ModelSafetyBufferingUpdatedNotification {
     pub reasons: Vec<String>,
     pub show_buffering_ui: bool,
     pub faster_model: Option<String>,
+}
+
+/// Operation whose model defaults are being resolved.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ModelContextIntent {
+    #[default]
+    Start,
+    Resume,
+    Fork,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelContextResolveParams {
+    #[serde(default)]
+    pub intent: ModelContextIntent,
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
+    #[ts(optional = nullable)]
+    pub cwd: Option<String>,
+    #[ts(optional = nullable)]
+    pub model_provider: Option<String>,
+    #[ts(optional = nullable)]
+    pub model_catalog_json: Option<String>,
+    #[ts(optional = nullable)]
+    pub model: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelContextInfo {
+    pub version: u32,
+    pub model_provider: String,
+    pub catalog_digest: Option<String>,
+    pub catalog_source: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelContextResolveResponse {
+    pub requires_openai_auth: bool,
+    pub model_context_id: String,
+    pub model_provider: String,
+    pub model: String,
+    pub context: ModelContextInfo,
+    pub capabilities: ModelContextCapabilities,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelContextCapabilities {
+    pub image_generation: bool,
+    pub web_search: bool,
+}
+
+impl From<&codex_protocol::model_context::ModelContextSnapshot> for ModelContextInfo {
+    fn from(snapshot: &codex_protocol::model_context::ModelContextSnapshot) -> Self {
+        Self {
+            version: snapshot.version,
+            model_provider: snapshot.provider_id.clone(),
+            catalog_digest: snapshot.catalog_digest.clone(),
+            catalog_source: snapshot.catalog_source.clone(),
+        }
+    }
 }

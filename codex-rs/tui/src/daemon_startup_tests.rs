@@ -23,7 +23,10 @@ fn feature_overrides_allow_daemon_without_allowing_arbitrary_config() {
         ("tui={fullscreen_transcript='true'}", false),
         ("tui={fullscreen_transcript=true,animations=false}", false),
         ("features={}", false),
-        ("model='test'", false),
+        ("model='test'", true),
+        ("model_provider='kimi'", true),
+        ("model_catalog_json='~/models.json'", true),
+        ("model_provider=true", false),
     ] {
         let overrides = codex_utils_cli::CliConfigOverrides {
             raw_overrides: vec![raw.to_string()],

@@ -563,6 +563,7 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
                                     Ordering::Release,
                                 );
                                 if !was_initialized && is_initialized {
+                                    processor.connection_initialized(IN_PROCESS_CONNECTION_ID, session.request_attestation()).await;
                                     processor.send_initialize_notifications().await;
                                 }
                             }

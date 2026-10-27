@@ -1086,6 +1086,185 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
     check_v2_agent_reload(V2ReloadRoute::Sender).await;
 }
 
+#[test_case::test_case("changed")]
+#[test_case::test_case("deleted")]
+#[test_case::test_case("corrupt")]
+#[tokio::test]
+async fn mixed_context_child_reload_restores_owned_catalog_and_current_role_restrictions(
+    source_change: &str,
+) {
+    let (home, mut config) = test_config().await;
+    config.features.enable(Feature::MultiAgentV2).expect("v2");
+    config.features.enable(Feature::Sqlite).expect("sqlite");
+    config.multi_agent_v2.max_concurrent_threads_per_session = 3;
+    let mut model = codex_models_manager::bundled_models_response()
+        .expect("bundled models")
+        .models
+        .into_iter()
+        .find(|model| model.slug == "gpt-5.5")
+        .expect("model");
+    model.context_window = Some(32_000);
+    config.model_catalog = Some(ModelsResponse {
+        models: vec![model.clone()],
+    });
+    let auth = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
+    config.resolved_model_context = Some(
+        crate::model_context::ResolvedModelContext::resolve(&config, auth, None)
+            .expect("parent context"),
+    );
+    let catalog_path = home.path().join("child-models.json");
+    model.context_window = Some(96_000);
+    std::fs::write(
+        &catalog_path,
+        serde_json::to_vec(&ModelsResponse {
+            models: vec![model.clone()],
+        })
+        .expect("JSON"),
+    )
+    .expect("child catalog");
+    let role_path = home.path().join("catalog-child.toml");
+    let role = format!(
+        "model_catalog_json = {:?}\n",
+        catalog_path.display().to_string()
+    );
+    std::fs::write(&role_path, &role).expect("role");
+    config.agent_roles.insert(
+        "catalog-child".into(),
+        AgentRoleConfig {
+            config_file: Some(role_path.clone()),
+            ..Default::default()
+        },
+    );
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let (parent_id, parent) = harness.start_paginated_thread().await;
+    let control = parent
+        .session
+        .services
+        .local_agent_runtime
+        .control(parent.session.session_id());
+    let mut child_config = parent.config().await.as_ref().clone();
+    crate::agent::role::apply_role_to_config(&mut child_config, Some("catalog-child"))
+        .await
+        .expect("child role");
+    let source = thread_spawn_source(
+        parent_id,
+        &parent.session_source,
+        next_thread_spawn_depth(&parent.session_source),
+        Some("catalog-child"),
+        Some("worker".into()),
+    )
+    .expect("source");
+    let spawned = control
+        .spawn_agent_with_metadata(
+            child_config,
+            text_input("child task"),
+            source,
+            SpawnAgentOptions {
+                parent_thread_id: Some(parent_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("spawn child");
+    let child = harness
+        .manager
+        .get_thread(spawned.thread_id)
+        .await
+        .expect("child");
+    let original = child
+        .config()
+        .await
+        .resolved_model_context
+        .as_ref()
+        .expect("owned context")
+        .snapshot
+        .catalog_digest
+        .clone();
+    assert_ne!(
+        original,
+        parent
+            .config()
+            .await
+            .resolved_model_context
+            .as_ref()
+            .expect("parent context")
+            .snapshot
+            .catalog_digest
+    );
+    child
+        .inject_response_items(vec![assistant_message(
+            "child persisted",
+            Some(MessagePhase::FinalAnswer),
+        )])
+        .await
+        .expect("persist child");
+    child.shutdown_and_wait().await.expect("shutdown child");
+    harness
+        .manager
+        .remove_thread(&spawned.thread_id)
+        .await
+        .expect("unload child");
+    match source_change {
+        "changed" => {
+            model.context_window = Some(160_000);
+            std::fs::write(
+                &catalog_path,
+                serde_json::to_vec(&ModelsResponse {
+                    models: vec![model],
+                })
+                .expect("JSON"),
+            )
+            .expect("change catalog");
+        }
+        "deleted" => std::fs::remove_file(&catalog_path).expect("delete catalog source"),
+        "corrupt" => {
+            std::fs::write(&catalog_path, "not catalog JSON").expect("corrupt catalog source")
+        }
+        _ => unreachable!(),
+    }
+    std::fs::write(
+        role_path,
+        format!("{role}\n[features]\nshell_tool = false\n"),
+    )
+    .expect("current role restriction");
+    harness
+        .manager
+        .ensure_multi_agent_v2_child_loaded(spawned.thread_id)
+        .await
+        .expect("reload owned snapshot without rereading catalog source");
+    let reloaded = harness
+        .manager
+        .get_thread(spawned.thread_id)
+        .await
+        .expect("reloaded child");
+    let current = reloaded.config().await;
+    assert_eq!(
+        current
+            .resolved_model_context
+            .as_ref()
+            .expect("restored context")
+            .snapshot
+            .catalog_digest,
+        original
+    );
+    assert!(
+        !current.features.enabled(Feature::ShellTool),
+        "current role restrictions still apply"
+    );
+    let info = reloaded
+        .session
+        .services
+        .models_manager
+        .get_model_info("gpt-5.5", &current.to_models_manager_config())
+        .await;
+    assert_eq!(info.context_window, Some(96_000));
+    reloaded
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown reloaded child");
+    parent.shutdown_and_wait().await.expect("shutdown parent");
+}
+
 #[tokio::test]
 async fn ensure_v2_child_loaded_preserves_evicted_parent_authority() {
     check_v2_agent_reload(V2ReloadRoute::NestedParent).await;
@@ -2484,6 +2663,7 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix(
                 ThreadSettingsAppliedEvent {
                     thread_id: Some(parent_thread_id),
                     thread_settings: ThreadSettingsSnapshot {
+                        model_context: None,
                         disabled_plugin_ids: Vec::new(),
                         model: "parent-only-model".to_string(),
                         model_provider_id: "parent-only-provider".to_string(),

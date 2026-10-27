@@ -20,7 +20,10 @@ async fn read_default_provider_capabilities() -> Result<()> {
         .await?;
 
     let request_id = mcp
-        .send_model_provider_capabilities_read_request(ModelProviderCapabilitiesReadParams {})
+        .send_model_provider_capabilities_read_request(ModelProviderCapabilitiesReadParams {
+            model_context_id: None,
+            thread_id: None,
+        })
         .await?;
     let received: ModelProviderCapabilitiesReadResponse =
         timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
@@ -48,7 +51,10 @@ async fn read_amazon_bedrock_provider_capabilities() -> Result<()> {
         .await?;
 
     let request_id = mcp
-        .send_model_provider_capabilities_read_request(ModelProviderCapabilitiesReadParams {})
+        .send_model_provider_capabilities_read_request(ModelProviderCapabilitiesReadParams {
+            model_context_id: None,
+            thread_id: None,
+        })
         .await?;
     let received: ModelProviderCapabilitiesReadResponse =
         timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
@@ -75,7 +81,10 @@ async fn read_amazon_bedrock_runtime_provider_capabilities() -> Result<()> {
         .await?;
 
     let request_id = mcp
-        .send_model_provider_capabilities_read_request(ModelProviderCapabilitiesReadParams {})
+        .send_model_provider_capabilities_read_request(ModelProviderCapabilitiesReadParams {
+            model_context_id: None,
+            thread_id: None,
+        })
         .await?;
     let received: ModelProviderCapabilitiesReadResponse =
         timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;

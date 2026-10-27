@@ -9,6 +9,7 @@ mod apply_patch;
 mod apps;
 mod client;
 mod client_common;
+pub mod model_context;
 mod model_request;
 mod realtime_context;
 mod realtime_conversation;

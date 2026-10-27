@@ -23,7 +23,7 @@ import type { SandboxMode } from "./SandboxMode";
  *
  * Prefer using thread_id whenever possible.
  */
-export type ThreadResumeParams = {threadId: string, /**
+export type ThreadResumeParams = {modelContextId?: string | null, threadId: string, /**
  * Configuration overrides for the resumed thread, if any.
  */
 model?: string | null, modelProvider?: string | null, serviceTier?: string | null | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, /**

@@ -1,5 +1,19 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "modelContextId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "threadId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
   "title": "ModelProviderCapabilitiesReadParams",
   "type": "object"
 }

@@ -40,6 +40,7 @@ struct AgentRoleOverrides {
     developer_instructions: Option<String>,
     model: Option<String>,
     model_provider: Option<String>,
+    model_catalog_json: Option<codex_utils_absolute_path::AbsolutePathBuf>,
     model_reasoning_effort: Option<ReasoningEffort>,
     model_reasoning_summary: Option<ReasoningSummary>,
     model_verbosity: Option<Verbosity>,
@@ -55,13 +56,29 @@ pub(crate) async fn apply_role_to_config(
     config: &mut Config,
     role_name: Option<&str>,
 ) -> Result<(), String> {
+    apply_role_to_config_mode(config, role_name, false).await
+}
+
+/// Reload keeps the child's owned provider/catalog while reapplying current role restrictions.
+pub(crate) async fn apply_role_preserving_model_context(
+    config: &mut Config,
+    role_name: Option<&str>,
+) -> Result<(), String> {
+    apply_role_to_config_mode(config, role_name, true).await
+}
+
+async fn apply_role_to_config_mode(
+    config: &mut Config,
+    role_name: Option<&str>,
+    preserve_model_context: bool,
+) -> Result<(), String> {
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
 
     let role = resolve_role_config(config, role_name)
         .cloned()
         .ok_or_else(|| format!("unknown agent_type '{role_name}'"))?;
 
-    apply_role_to_config_inner(config, role_name, &role)
+    apply_role_to_config_inner(config, role_name, &role, preserve_model_context)
         .await
         .map_err(|err| {
             tracing::warn!("failed to apply role to config: {err}");
@@ -73,6 +90,7 @@ async fn apply_role_to_config_inner(
     config: &mut Config,
     role_name: &str,
     role: &AgentRoleConfig,
+    preserve_model_context: bool,
 ) -> anyhow::Result<()> {
     let is_built_in = !config.agent_roles.contains_key(role_name);
     let Some(config_file) = role.config_file.as_ref() else {
@@ -84,6 +102,10 @@ async fn apply_role_to_config_inner(
         developer_instructions: role_config.developer_instructions,
         model: role_config.model,
         model_provider: role_config.model_provider,
+        model_catalog_json: config
+            .resolved_model_context
+            .as_ref()
+            .and(role_config.model_catalog_json),
         model_reasoning_effort: role_config.model_reasoning_effort,
         model_reasoning_summary: role_config.model_reasoning_summary,
         model_verbosity: role_config.model_verbosity,
@@ -91,6 +113,12 @@ async fn apply_role_to_config_inner(
         service_tier: role_config.service_tier,
         ..Default::default()
     };
+
+    if preserve_model_context {
+        overrides.model = None;
+        overrides.model_provider = None;
+        overrides.model_catalog_json = None;
+    }
 
     if let Some(features) = role_config.features {
         for (key, enabled) in features.entries() {
@@ -202,6 +230,28 @@ mod role_overrides {
                     };
                     anyhow::anyhow!(message)
                 })?;
+        }
+        if config.resolved_model_context.is_some()
+            && overrides
+                .model_provider
+                .as_ref()
+                .is_some_and(|provider| provider != &config.model_provider_id)
+        {
+            // A catalog and selected model belong to their provider.
+            next_config.model_catalog = None;
+            if overrides.model.is_none() {
+                next_config.model = None;
+            }
+        }
+        if let Some(path) = &overrides.model_catalog_json {
+            let catalog = crate::model_context::load_catalog(path.as_path())?;
+            next_config.model_catalog = Some(catalog);
+        }
+        if config.resolved_model_context.is_some() {
+            crate::model_context::validate_managed_catalog(
+                &next_config,
+                next_config.model_catalog.as_ref(),
+            )?;
         }
         if let Some(instructions) = &overrides.developer_instructions {
             next_config.developer_instructions = Some(instructions.clone());

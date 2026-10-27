@@ -104,10 +104,14 @@ requires_openai_auth = false
     );
     // A fork of the active session preserves its provider even if launch defaults differ.
     server.model_provider_override = Some("client-provider".into());
+    let destination = home.path().join("fork-destination");
+    std::fs::create_dir(&destination)?;
+    let mut destination_config = server_config;
+    destination_config.cwd = AbsolutePathBuf::try_from(destination.clone())?;
     let forked = server
         .fork_thread_at(
             &local_settings,
-            server_config,
+            destination_config,
             parent,
             /*last_turn_id*/ None,
             /*before_turn_id*/ None,
@@ -116,6 +120,7 @@ requires_openai_auth = false
         )
         .await?;
     assert_eq!(forked.session.model_provider_id, "server-provider");
+    assert_eq!(forked.session.cwd.as_path(), destination.as_path());
     server.shutdown().await?;
     Ok(())
 }

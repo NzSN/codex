@@ -17,7 +17,7 @@ import type { ThreadSource } from "./ThreadSource";
  *
  * Prefer using thread_id whenever possible.
  */
-export type ThreadForkParams = {threadId: string, /**
+export type ThreadForkParams = {modelContextId?: string | null, threadId: string, /**
  * Optional last turn id to fork through, inclusive.
  *
  * When specified, turns after `last_turn_id` are omitted from the fork.

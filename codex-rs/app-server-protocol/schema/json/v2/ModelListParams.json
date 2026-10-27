@@ -23,6 +23,18 @@
         "integer",
         "null"
       ]
+    },
+    "modelContextId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "threadId": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "title": "ModelListParams",

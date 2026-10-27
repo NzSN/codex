@@ -750,6 +750,14 @@ impl AppServerRequestHandle {
 }
 
 impl AppServerClient {
+    pub fn mixed_provider_app_server_version(&self) -> Option<u32> {
+        match self {
+            Self::InProcess(_) => Some(1),
+            Self::Remote(client) => client.mixed_provider_app_server_version(),
+            Self::Cloud(_) => None,
+        }
+    }
+
     /// App-server platform family, which can differ from the executor's platform.
     /// Older remote servers may omit this metadata.
     pub fn platform_family(&self) -> Option<&str> {

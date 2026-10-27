@@ -320,6 +320,7 @@ impl App {
                 }
             }
             AppEvent::StartupThreadStarted { result } => {
+                if result.is_ok() { app_server.clear_pending_model_context(); }
                 self.handle_startup_thread_started(app_server, result)
                     .await?;
             }
@@ -2271,12 +2272,13 @@ impl App {
             }
             AppEvent::FetchModels { request_id } => {
                 if self.chat_widget.model_popup_request_is_current(request_id) {
-                    app_server.fetch_models(request_id, self.app_event_tx.clone());
+                    app_server.fetch_models(request_id, self.chat_widget.thread_id(), self.app_event_tx.clone());
                 }
             }
             AppEvent::ModelsLoaded { request_id, result: Ok(models) }
                 if self.chat_widget.model_popup_request_is_current(request_id)
-                    && self.chat_widget.status_account_display() == Some(&StatusAccountDisplay::ApiKey) =>
+                    && self.chat_widget.status_account_display() == Some(&StatusAccountDisplay::ApiKey)
+                    && self.chat_widget.config_ref().model_provider_id == "openai" =>
             {
                 let checked = app_server.constrain_api_key_models(
                     self.chat_widget.config_ref(),

@@ -1158,6 +1158,11 @@ client_request_definitions! {
         serialization: None,
         response: v2::GatewayOAuthCancelResponse,
     },
+    ModelContextResolve => "modelContext/resolve" {
+        params: v2::ModelContextResolveParams,
+        serialization: None,
+        response: v2::ModelContextResolveResponse,
+    },
     ModelProviderCapabilitiesRead => "modelProvider/capabilities/read" {
         params: v2::ModelProviderCapabilitiesReadParams,
         serialization: None,
@@ -3257,6 +3262,7 @@ mod tests {
         let response = ClientResponse::ThreadStart {
             request_id: RequestId::Integer(7),
             response: v2::ThreadStartResponse {
+                model_context: None,
                 disabled_plugin_ids: Vec::new(),
                 thread: v2::Thread {
                     originator: None,
@@ -3734,7 +3740,10 @@ mod tests {
     fn serialize_model_provider_capabilities_read() -> Result<()> {
         let request = ClientRequest::ModelProviderCapabilitiesRead {
             request_id: RequestId::Integer(7),
-            params: v2::ModelProviderCapabilitiesReadParams {},
+            params: v2::ModelProviderCapabilitiesReadParams {
+                model_context_id: None,
+                thread_id: None,
+            },
         };
         assert_eq!(
             json!({
