@@ -39,6 +39,7 @@ pub use provider::ProviderAccountState;
 pub use provider::ProviderAuthRecoveryMessages;
 pub use provider::ProviderUnauthorizedRecovery;
 pub use provider::SharedModelProvider;
+pub use provider::approval_review_uses_parent_model;
 pub use provider::create_model_provider;
 
 #[cfg(test)]

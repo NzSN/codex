@@ -92,6 +92,17 @@ pub const DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL: &str = "codex-auto-review";
 
 const API_KEY_APPROVAL_REVIEW_PREFERRED_MODEL: &str = "gpt-5.6-luna";
 
+/// Custom providers review with the action-time parent model. A bundled catalog or
+/// an OpenAI login does not authorize using OpenAI's specialized reviewer models.
+pub fn approval_review_uses_parent_model(provider_id: &str) -> bool {
+    !matches!(
+        provider_id,
+        codex_model_provider_info::OPENAI_PROVIDER_ID
+            | codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID
+            | codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID
+    )
+}
+
 /// Default model used for memory extraction when a provider does not require a
 /// backend-specific model ID.
 pub const DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL: &str = "gpt-5.6-luna";

@@ -118,6 +118,11 @@ pub(super) async fn guardian_review_session_config(
     context: &GuardianReviewContext,
 ) -> anyhow::Result<GuardianReviewSessionConfig> {
     let turn = context.turn();
+    super::reviewer_config::ensure_provider_review_catalog(
+        &turn.config,
+        &context.model_info,
+        &session.services.models_manager,
+    )?;
     let network_proxy = session.services.network_proxy.load_full();
     let live_network_config = match network_proxy.as_ref() {
         Some(network_proxy) => Some(network_proxy.proxy().current_cfg().await?),

@@ -6,6 +6,11 @@ Date: 2026-10-27. Starting checkout: `91876a35008ee2ed7efedb62c2519a0105f09482`.
 
 Design: [Mixed Provider App Server](mixed-provider-app-server-design.md).
 
+Follow-up (2026-10-28): [Provider-bound automatic approval review](provider-bound-auto-review.md)
+documents the Kimi legacy-resume failure, the implemented same-provider/model reviewer
+policy, explicit catalog recovery, and qualification of the follow-up fixes for runtime
+catalog ownership, trusted-skill evidence, and stale default-model handling.
+
 ## Implementation scope
 
 - Core provider/catalog contexts and scoped models managers.

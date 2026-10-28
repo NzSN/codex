@@ -198,6 +198,151 @@ async fn json_transcript_mode_reaches_classifier_instructions_and_evidence() -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn custom_root_records_trusted_skills_without_starting_builtin_classifier() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    let path = test.home.path().join("skills/trusted/SKILL.md");
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    std::fs::write(&path, "User-owned skill instructions")?;
+    let path = path.canonicalize()?.display().to_string();
+    let mut builder = ExtensionRegistryBuilder::new();
+    super::install(
+        &mut builder,
+        test.thread_manager.auth_manager(),
+        Arc::downgrade(&test.thread_manager),
+    );
+    let registry = builder.build();
+    let session_store = ExtensionData::new("skill-session");
+    let turn_store = ExtensionData::new("skill-turn");
+    for provider in ["openai", "kimi"] {
+        let mut config = test.config.clone();
+        config.model_provider_id = provider.to_owned();
+        config.features.enable(Feature::GuardianApproval)?;
+        config.approvals_reviewer = if provider == "kimi" {
+            ApprovalsReviewer::AutoReview
+        } else {
+            ApprovalsReviewer::User
+        };
+        let thread_store = ExtensionData::new(provider);
+        let evidence =
+            thread_store.get_or_init(codex_core::context::GuardianReviewEvidence::default);
+        registry.thread_lifecycle_contributors()[0]
+            .on_thread_start(ThreadStartInput {
+                config: &config,
+                session_source: &SessionSource::Exec,
+                persistent_thread_state_available: false,
+                environments: &[],
+                mcp_resource_client: None,
+                extension_metrics: None,
+                session_store: &session_store,
+                thread_store: &thread_store,
+            })
+            .await;
+        registry.skill_invocation_contributors()[0]
+            .on_skill_invocation(codex_extension_api::SkillInvocationInput {
+                session_store: &session_store,
+                thread_store: &thread_store,
+                turn_store: &turn_store,
+                turn_id: "skill-turn",
+                skill_resource: &path,
+                kind: codex_extension_api::SkillInvocationKind::Explicit,
+            })
+            .await;
+        assert!(Arc::ptr_eq(
+            &evidence,
+            &thread_store
+                .get::<codex_core::context::GuardianReviewEvidence>()
+                .unwrap()
+        ));
+        assert_eq!(
+            evidence.trusted_skill_paths("skill-turn"),
+            vec![path.clone()],
+            "provider {provider}"
+        );
+        if provider == "kimi" {
+            assert!(thread_store.get::<LunaSampler>().is_none());
+            assert!(thread_store.get::<GuardianV2ScoreProgress>().is_none());
+        }
+    }
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn custom_provider_drops_builtin_classifier_state_even_when_enabled() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    let mut config = test.config.clone();
+    config.features.enable(Feature::GuardianApproval)?;
+    config.features.enable(Feature::GuardianV2)?;
+    config
+        .features
+        .enable(Feature::GuardianV2DecisionsComparison)?;
+    config.approvals_reviewer = ApprovalsReviewer::User;
+    let mut builder = ExtensionRegistryBuilder::new();
+    super::install(
+        &mut builder,
+        test.thread_manager.auth_manager(),
+        Arc::downgrade(&test.thread_manager),
+    );
+    let registry = builder.build();
+    let session_store = ExtensionData::new("provider-review-session");
+    let thread_store = test.codex.thread_extension_data();
+    fn input<'a>(
+        config: &'a Config,
+        session_store: &'a ExtensionData,
+        thread_store: &'a ExtensionData,
+    ) -> ThreadStartInput<'a, Config> {
+        ThreadStartInput {
+            config,
+            session_source: &SessionSource::Exec,
+            persistent_thread_state_available: false,
+            environments: &[],
+            mcp_resource_client: None,
+            extension_metrics: None,
+            session_store,
+            thread_store,
+        }
+    }
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(input(&config, &session_store, thread_store))
+        .await;
+    assert!(thread_store.get::<LunaSampler>().is_some());
+    assert!(thread_store.get::<GuardianV2ScoreProgress>().is_some());
+
+    // Provider identity wins over the inherited OpenAI display name/auth metadata.
+    config.model_provider_id = "kimi".to_owned();
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(input(&config, &session_store, thread_store))
+        .await;
+    assert!(thread_store.get::<LunaSampler>().is_none());
+    assert!(
+        thread_store
+            .get::<crate::async_scorer::conversation::ConversationBackend>()
+            .is_none()
+    );
+    assert!(
+        thread_store
+            .get::<crate::async_scorer::decisions::DecisionsSampler>()
+            .is_none()
+    );
+    assert!(
+        thread_store
+            .get::<codex_extension_api::GuardianV2Enabled>()
+            .is_none()
+    );
+    assert!(thread_store.get::<GuardianV2ScoreProgress>().is_none());
+    assert!(thread_store.get::<GuardianV2Config>().is_none());
+    assert!(server.received_requests().await.unwrap().is_empty());
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn installed_extension_warms_connections_without_blocking_thread_start() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

@@ -59,6 +59,7 @@ async fn code_mode_uses_permissions_approved_in_the_same_cell(
     let codex_home = tempfile::TempDir::new()?;
     let server = responses::start_mock_server().await;
     MockResponsesConfig::new(&server.uri())
+        .with_builtin_openai_provider()
         .with_model("gpt-5.4")
         .with_approval_policy("on-request")
         .with_sandbox_mode("read-only")
@@ -257,6 +258,7 @@ async fn steps_capture_permission_grants_and_preserve_their_scope(
     let codex_home = tempfile::TempDir::new()?;
     let server = responses::start_mock_server().await;
     MockResponsesConfig::new(&server.uri())
+        .with_builtin_openai_provider()
         .with_model("gpt-5.4")
         .with_approval_policy("on-request")
         .with_sandbox_mode("read-only")
@@ -506,6 +508,7 @@ async fn background_cell_uses_permissions_requested_after_next_turn_starts(
     let codex_home = tempfile::TempDir::new()?;
     let server = responses::start_mock_server().await;
     MockResponsesConfig::new(&server.uri())
+        .with_builtin_openai_provider()
         .with_model("gpt-5.4")
         .with_approval_policy("on-request")
         .with_sandbox_mode("read-only")
@@ -762,6 +765,7 @@ async fn request_permissions_round_trip() -> Result<()> {
     let server = responses::start_mock_server().await;
     let mock = responses::mount_sse_sequence(&server, responses).await;
     MockResponsesConfig::new(&server.uri())
+        .with_builtin_openai_provider()
         .with_approval_policy("on-request")
         .enable_feature(Feature::RequestPermissionsTool)
         .write(codex_home.path())?;

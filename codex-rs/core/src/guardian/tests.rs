@@ -2169,6 +2169,87 @@ async fn guardian_review_uses_model_catalog_override_when_preferred_review_model
     Ok(())
 }
 
+#[tokio::test]
+async fn custom_provider_review_keeps_captured_model_despite_bundled_override() {
+    let (session, mut turn) =
+        guardian_test_session_and_turn_with_base_url("http://localhost").await;
+    let turn_mut = Arc::get_mut(&mut turn).expect("unique turn");
+    let config = Arc::make_mut(&mut turn_mut.config);
+    config.model_provider_id = "kimi".to_owned();
+    update_turn_settings_for_test(turn_mut, |settings| {
+        let model = Arc::make_mut(&mut settings.model_info);
+        model.slug = "k3.1-pro".to_owned();
+        model.auto_review_model_override = Some("codex-auto-review".to_owned());
+        model.tool_mode = Some(codex_protocol::openai_models::ToolMode::Direct);
+    });
+    let context = GuardianReviewContext::from(&turn);
+    let (selected, metadata) =
+        super::reviewer_config::resolve_review_model(&session, &context).await;
+    assert_eq!(selected.model, "k3.1-pro");
+    assert!(!selected.model_overridden);
+    assert_eq!(selected.model_override, None);
+    assert!(Arc::ptr_eq(&metadata, &context.model_info));
+}
+
+#[tokio::test]
+async fn custom_provider_review_rejects_missing_or_fallback_catalog_metadata() {
+    let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
+    let mut config = (*turn.config).clone();
+    config.model_provider_id = "kimi".to_owned();
+    config.model_catalog = None;
+    config.model_provider.model_catalog_url = None;
+    let mut model = turn.model_info().as_ref().clone();
+    model.slug = "k3.1-pro".to_owned();
+    model.used_fallback_model_metadata = false;
+    config.model = Some(model.slug.clone());
+    let unrelated_manager = &session.services.models_manager;
+    let check = super::reviewer_config::ensure_provider_review_catalog;
+    assert!(
+        check(&config, &model, unrelated_manager)
+            .unwrap_err()
+            .to_string()
+            .contains("model_catalog_json")
+    );
+
+    config.model_catalog = Some(ModelsResponse {
+        models: vec![model.clone()],
+    });
+    assert!(check(&config, &model, unrelated_manager).is_err());
+    let binding = crate::model_context::ResolvedModelContext::resolve(
+        &config,
+        session.services.auth_manager.clone(),
+        None,
+    )
+    .expect("static context");
+    config.resolved_model_context = Some(binding.clone());
+    assert!(check(&config, &model, unrelated_manager).is_err());
+    check(&config, &model, &binding.models_manager).expect("own runtime catalog");
+    let provider_id = std::mem::replace(&mut config.model_provider_id, "other-provider".to_owned());
+    assert!(check(&config, &model, &binding.models_manager).is_err());
+    config.model_provider_id = provider_id;
+    model.used_fallback_model_metadata = true;
+    assert!(check(&config, &model, &binding.models_manager).is_err());
+    model.used_fallback_model_metadata = false;
+    model.slug = "different-model".to_owned();
+    assert!(check(&config, &model, &binding.models_manager).is_err());
+
+    config.model_catalog = None;
+    config.resolved_model_context = None;
+    config.model_provider.model_catalog_url = Some("https://provider.invalid/models".into());
+    assert!(check(&config, &model, unrelated_manager).is_err());
+    let binding = crate::model_context::ResolvedModelContext::resolve(
+        &config,
+        session.services.auth_manager.clone(),
+        None,
+    )
+    .expect("native context");
+    config.resolved_model_context = Some(binding.clone());
+    assert!(check(&config, &model, unrelated_manager).is_err());
+    check(&config, &model, &binding.models_manager).expect("own native runtime metadata");
+    model.used_fallback_model_metadata = true;
+    assert!(check(&config, &model, &binding.models_manager).is_err());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_review_uses_preferred_review_model_without_model_catalog_override()
 -> anyhow::Result<()> {

@@ -449,6 +449,9 @@ pub(crate) struct ThreadManagerState {
     agent_control_factory: Option<AgentControlFactory>,
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
+    // Only the startup provider/catalog can establish ownership for legacy
+    // callers. Per-thread overrides must bring their own resolved context.
+    default_model_context: Option<Arc<crate::model_context::ResolvedModelContext>>,
     git_root_discovery: Arc<GitRootDiscovery>,
     environment_manager: Arc<EnvironmentManager>,
     starting_mcp_runtimes: std::sync::Mutex<Vec<std::sync::Weak<AtomicBool>>>,
@@ -583,6 +586,26 @@ impl ThreadManager {
         external_time_provider: Option<Arc<dyn TimeProvider>>,
     ) -> Self {
         let codex_home = config.codex_home.clone();
+        let default_model_context = config.resolved_model_context.clone().or_else(|| {
+            (codex_model_provider::approval_review_uses_parent_model(&config.model_provider_id)
+                && (config.model_catalog.is_some()
+                    || config.model_provider.model_catalog_url.is_some()))
+            .then(|| {
+                // Context ownership is independent of the daemon's selected
+                // model. Validate selection at thread start, after overrides.
+                let mut binding_config = config.clone();
+                binding_config.model = None;
+                // Invalid startup metadata cannot authorize a legacy reviewer.
+                // A later explicitly resolved context remains available for recovery.
+                crate::model_context::ResolvedModelContext::resolve(
+                    &binding_config,
+                    auth_manager.clone(),
+                    None,
+                )
+                .ok()
+            })
+            .flatten()
+        });
         let restriction_product = session_source.restriction_product();
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let skills_service = Arc::new(HostSkillsService::new_with_restriction_product(
@@ -620,6 +643,7 @@ impl ThreadManager {
                 thread_id_generator: default_thread_id_generator(),
                 agent_control_factory: None,
                 models_manager,
+                default_model_context,
                 git_root_discovery: Arc::default(),
                 environment_manager,
                 starting_mcp_runtimes: std::sync::Mutex::new(Vec::new()),
@@ -809,6 +833,7 @@ impl ThreadManager {
                 agent_control_factory: None,
                 models_manager: create_model_provider(provider, Some(auth_manager.clone()))
                     .models_manager(codex_home, /*config_model_catalog*/ None),
+                default_model_context: None,
                 git_root_discovery: Arc::default(),
                 environment_manager,
                 starting_mcp_runtimes: std::sync::Mutex::new(Vec::new()),
@@ -2438,6 +2463,17 @@ impl ThreadManagerState {
         };
         let attachment_source =
             forked_from_thread_id.filter(|_| matches!(&initial_history, InitialHistory::Forked(_)));
+        // Preserve legacy startup selections without blessing a thread override
+        // that still uses the host's default manager. Catalog presence alone does
+        // not establish ownership when different providers share a model name.
+        if config.resolved_model_context.is_none()
+            && let Some(context) = self
+                .default_model_context
+                .as_ref()
+                .filter(|context| context.matches_config(&config))
+        {
+            config.resolved_model_context = Some(context.clone());
+        }
         if config.resolved_model_context.is_some() {
             crate::model_context::validate_managed_catalog(&config, config.model_catalog.as_ref())
                 .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;

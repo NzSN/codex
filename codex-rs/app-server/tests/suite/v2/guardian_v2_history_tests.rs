@@ -257,8 +257,7 @@ async fn guardians_retain_evidence_after_compaction_and_resume(
     let (mcp_url, mcp_server) = start_mcp_server(/*sensitive_action*/ None).await?;
     let codex_home = TempDir::new()?;
     let mock_config = MockResponsesConfig::new(&responses_url)
-        .with_provider_name("OpenAI")
-        .with_provider_config("requires_openai_auth = true\nsupports_websockets = false")
+        .with_builtin_openai_provider()
         .with_root_config("approvals_reviewer = \"auto_review\"\nmodel_auto_compact_token_limit = 1000000")
         .enable_feature(Feature::DefaultModeRequestUserInput)
         .enable_feature(Feature::GuardianApproval)

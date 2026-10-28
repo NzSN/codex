@@ -131,7 +131,7 @@ async fn resumed_thread_does_not_wait_for_guardian_websocket_warmup() -> Result<
     );
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&responses_url)
-        .with_provider_config("supports_websockets = false")
+        .with_builtin_openai_provider()
         .with_root_config("approvals_reviewer = \"auto_review\"")
         .with_extra_config("[features.guardianv2]\nenabled = true")
         .enable_feature(Feature::GuardianApproval)
@@ -145,7 +145,7 @@ async fn resumed_thread_does_not_wait_for_guardian_websocket_warmup() -> Result<
         "2025-01-05T12-00-00",
         "2025-01-05T12:00:00Z",
         USER_CONTEXT,
-        Some("mock_provider"),
+        Some("openai"),
         /*git_info*/ None,
     )?;
     let mut app_server = TestAppServer::builder()
@@ -656,26 +656,38 @@ async fn luna_response(state: &MockResponsesState, request: Value) -> Vec<Value>
 
 async fn luna_websocket(
     State(state): State<Arc<MockResponsesState>>,
+    headers: axum::http::HeaderMap,
     websocket: WebSocketUpgrade,
 ) -> impl IntoResponse {
+    // This fixture models classifier WebSockets and actor/reviewer HTTP. The
+    // built-in OpenAI client must negotiate its HTTP fallback at the handshake.
+    if headers
+        .get("x-openai-internal-codex-responses-lite")
+        .and_then(|value| value.to_str().ok())
+        != Some("true")
+    {
+        return axum::http::StatusCode::UPGRADE_REQUIRED.into_response();
+    }
     state.luna_connections.fetch_add(1, Ordering::SeqCst);
-    websocket.on_upgrade(move |mut socket| async move {
-        while let Some(Ok(message)) = socket.recv().await {
-            let Message::Text(text) = message else {
-                continue;
-            };
-            let request: Value = serde_json::from_str(&text).expect("valid Luna request");
-            for event in luna_response(&state, request).await {
-                if socket
-                    .send(Message::Text(event.to_string().into()))
-                    .await
-                    .is_err()
-                {
-                    break;
+    websocket
+        .on_upgrade(move |mut socket| async move {
+            while let Some(Ok(message)) = socket.recv().await {
+                let Message::Text(text) = message else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).expect("valid Luna request");
+                for event in luna_response(&state, request).await {
+                    if socket
+                        .send(Message::Text(event.to_string().into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
             }
-        }
-    })
+        })
+        .into_response()
 }
 
 async fn guardian_v2_routes_tool_approvals(
@@ -927,8 +939,8 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         codex_protocol::openai_models::AsyncClassifierMode::Conversation => "",
     };
     let mut mock_config = MockResponsesConfig::new(&responses_url)
+        .with_builtin_openai_provider()
         .with_model(MODEL)
-        .with_provider_config("supports_websockets = false")
         .with_approval_policy("on-request")
         .with_root_config(&format!(
             "{reviewer_config}\nchatgpt_base_url = \"{}\"",
@@ -943,14 +955,12 @@ async fn guardian_v2_routes_scoped_tool_approvals(
     }
     if lifecycle.uses_root_worker() {
         mock_config = mock_config
-            .with_provider_name("OpenAI")
             .enable_feature(Feature::Collab)
             .enable_feature(Feature::MultiAgentV2)
             .disable_feature(Feature::EnableRequestCompression);
     }
     if matches!(lifecycle, ThreadLifecycle::RootUserInputCompaction) {
         mock_config = mock_config
-            .with_provider_name("OpenAI")
             .disable_feature(Feature::TokenBudget)
             .disable_feature(Feature::EnableRequestCompression);
     }
@@ -982,7 +992,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
                 "2025-01-05T12-00-00",
                 "2025-01-05T12:00:00Z",
                 USER_CONTEXT,
-                Some("mock_provider"),
+                Some("openai"),
                 /*git_info*/ None,
             )?;
             let mut rollout = std::fs::OpenOptions::new().append(true).open(rollout_path(
@@ -1759,7 +1769,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
     {
         let state_db = StateRuntime::init(
             load_default_config_for_test(&codex_home).await.sqlite,
-            "mock_provider".to_owned(),
+            "openai".to_owned(),
         )
         .await?;
         // Exercise the same log export used by feedback/upload, including async
@@ -2052,7 +2062,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
             .to_owned();
         let state_db = StateRuntime::init(
             codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
-            "mock_provider".to_owned(),
+            "openai".to_owned(),
         )
         .await?;
         let metadata = state_db
@@ -2237,8 +2247,8 @@ async fn guardian_v2_trusts_invoked_user_skills_but_rejects_repository_forgery()
     let (mcp_server_url, mcp_server_handle) = start_mcp_server(/*sensitive_action*/ None).await?;
 
     MockResponsesConfig::new(&responses_url)
+        .with_builtin_openai_provider()
         .with_model(MODEL)
-        .with_provider_config("supports_websockets = false")
         .with_approval_policy("on-request")
         .with_root_config("approvals_reviewer = \"auto_review\"")
         .with_extra_config(&format!(
@@ -2434,8 +2444,8 @@ async fn first_cua_review_does_not_wait_for_initial_score(
     .await?;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&responses_url)
+        .with_builtin_openai_provider()
         .with_model(MODEL)
-        .with_provider_config("supports_websockets = false")
         .with_approval_policy("on-request")
         .with_root_config("approvals_reviewer = \"auto_review\"")
         .with_extra_config(&format!(
@@ -2520,8 +2530,8 @@ async fn user_approval_skips_async_guardian_without_changing_other_modes() -> Re
         start_mcp_server_with_tools(&["js"], /*sensitive_action*/ None).await?;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&responses_url)
+        .with_builtin_openai_provider()
         .with_model(MODEL)
-        .with_provider_config("supports_websockets = false")
         .with_approval_policy("on-request")
         .with_root_config("approvals_reviewer = \"user\"")
         .with_extra_config(&format!(
