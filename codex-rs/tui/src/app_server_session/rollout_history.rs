@@ -256,6 +256,10 @@ impl AppServerSession {
                 ));
             }
         };
+        let requires_openai_auth = self
+            .pending_model_context
+            .as_ref()
+            .map(|context| context.requires_openai_auth);
         self.clear_pending_model_context();
         self.hydrate_initial_thread_history(
             &mut response.thread,
@@ -275,6 +279,7 @@ impl AppServerSession {
             self.thread_params_mode(),
         )
         .await?;
+        started.session.requires_openai_auth = requires_openai_auth;
         started.session.fork_parent_title = fork_parent_title;
         if self.task_tools_available(thread_id) {
             self.remember_task_tool_thread(thread_id);

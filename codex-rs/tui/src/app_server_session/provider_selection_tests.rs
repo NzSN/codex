@@ -63,6 +63,7 @@ requires_openai_auth = false
         )
         .await?;
     assert_eq!(resumed.session.model_provider_id, "server-provider");
+    assert_eq!(resumed.session.requires_openai_auth, Some(false));
     for explicit in [false, true] {
         server.model_provider_override = explicit.then(|| "client-provider".to_string());
         let expected = if explicit {
@@ -71,9 +72,11 @@ requires_openai_auth = false
             "server-provider"
         };
         let started = server.start_thread(&client_config).await?;
+        assert_eq!(started.session.requires_openai_auth, Some(false));
         let forked = server
             .fork_thread(&local_settings, client_config.clone(), parent)
             .await?;
+        assert_eq!(forked.session.requires_openai_auth, Some(false));
         assert_eq!(
             (
                 started.session.model_provider_id.as_str(),
@@ -172,6 +175,61 @@ async fn required_provider_overrides_oss_history_selection() -> Result<()> {
     assert_eq!(
         server.history_model_provider(&config).await?,
         Some("openai".into())
+    );
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn bootstrap_retains_host_account_for_status_after_provider_switch() -> Result<()> {
+    let home = tempfile::tempdir()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        r#"
+[features]
+api_key_model_discovery = false
+[model_providers.custom]
+name = "Custom provider"
+base_url = "http://127.0.0.1:9/v1"
+wire_api = "responses"
+requires_openai_auth = false
+"#,
+    )?;
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .build()
+        .await?;
+    let mut server = crate::start_embedded_app_server_for_picker(&config).await?;
+    server.launch_model_choices.provider = Some("custom".into());
+    server.launch_model_choices.model = Some("gpt-5.2".into());
+    server
+        .ensure_model_context(
+            &config,
+            codex_app_server_protocol::ModelContextIntent::Start,
+            None,
+        )
+        .await?;
+    let bootstrap = server
+        .bootstrap_with_account(
+            &config,
+            GetAccountResponse {
+                account: Some(Account::Chatgpt {
+                    email: Some("host@example.com".into()),
+                    plan_type: codex_protocol::account::PlanType::Business,
+                }),
+                requires_openai_auth: true,
+                workspace_routing: None,
+            },
+        )
+        .await?;
+    assert!(!bootstrap.requires_openai_auth);
+    assert!(bootstrap.has_chatgpt_account);
+    assert_eq!(
+        bootstrap.plan_type,
+        Some(codex_protocol::account::PlanType::Business)
+    );
+    assert!(
+        matches!(bootstrap.status_account_display, Some(StatusAccountDisplay::ChatGpt { email: Some(email), .. }) if email == "host@example.com")
     );
     server.shutdown().await?;
     Ok(())

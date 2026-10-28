@@ -206,3 +206,31 @@ cargo +stable fmt --manifest-path codex-rs/Cargo.toml --all -- --check
 ```
 
 Integration tests need permission to bind local mock HTTP and Unix-socket listeners. The API and PTY fixtures use temporary homes and synthetic credentials. Temporary detailed logs are under `/tmp/mixed-*.log`; the durable record here captures commands, counts, scope, and limitations without copying credentials or user configuration.
+
+## Mixed-provider `/status` correction (2026-10-28)
+
+The TUI retains the host account identity while scoping `/status` account details, usage links, cached limits, and billing requests to the active OpenAI account-backed provider. Start, resume, and fork preserve the resolver's authentication requirement in the internal thread session state. Cached session switches restore that requirement; incomplete metadata for a different provider does not inherit the previous provider's requirement. Account updates invalidate cached limits and outstanding account-scoped status requests.
+
+Validation used the pinned **Rust 1.99.1** compiler. The installed `stable` alias currently selects 1.96.0, so the earlier document's historical equivalence between `+stable` and the compiler pin does not apply to this rerun. The initial stable build and the fully optimized pinned build were interrupted during compilation and provide no runtime validation. The completed test build disabled optimization only for the TUI package and retained the compiled release dependencies:
+
+```sh
+RUST_MIN_STACK=8388608 cargo +1.99.1 test --manifest-path codex-rs/Cargo.toml \
+  -p codex-tui --lib --release --offline \
+  --config 'profile.release.package.codex-tui.opt-level=0' <filter>
+```
+
+| Filter | Passed |
+| --- | ---: |
+| `chatwidget::tests::app_server::status_` | 2 |
+| `chatwidget::tests::status_command_tests` | 16 |
+| `app_server_session::provider_selection_tests` | 4 |
+| `app::tests::thread_usage` | 8 |
+| `session_and_settings_sync_server_provider_id` | 1 |
+| `app::thread_session_state::tests` | 4 |
+| `app_server_session::workspace_roots_tests` | 2 |
+
+These **37 distinct selected tests passed**. The three new regressions cover provider switches and account notifications, same-provider authentication changes, and retaining the host identity during custom-provider bootstrap. The existing provider integration also checks authentication metadata through start, resume, and fork. Workspace formatting with the pinned compiler and `git diff --check` passed.
+
+The broader `status_` selection passed 388 tests and failed 22 with local mock listeners allowed. The pre-existing test binary `codex_tui-aa5d2a8ba79c4123` passed 385 tests and failed the exact same 22 named tests; the current selection adds the three new passing regressions. Those failures concern version/shortcut snapshots and an existing Daybreak assertion. This comparison uses an existing binary, not a fresh baseline build of HEAD. The original sandboxed selection passed 387 and failed 23; mock-listener denial prevented one additional test from passing. The remote workspace-root fixture also required a rerun with local listeners allowed, after which both lifecycle tests passed.
+
+Detailed logs are retained under `/tmp/mixed-status-*.log`, including the interrupted builds and broader failures. Generated failing snapshots were moved to `/tmp/mixed-status-snapshot-failures/` without accepting them. No live provider, installed binary replacement, or fully optimized release qualification was performed.

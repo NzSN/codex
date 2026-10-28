@@ -1250,6 +1250,9 @@ impl App {
             notification.thread.environments.as_deref(),
         );
         session.thread_name = notification.thread.name.clone();
+        if session.model_provider_id != notification.thread.model_provider {
+            session.requires_openai_auth = None;
+        }
         session.model_provider_id = notification.thread.model_provider.clone();
         session
             .set_cwd_retargeting_implicit_runtime_workspace_root(notification.thread.cwd.clone());

@@ -814,17 +814,8 @@ impl AppServerSession {
                     .and_then(|defaults| defaults.model.clone()),
             })
             .wrap_err("No models are available. Set `model` explicitly or check your model catalog configuration.")?;
-        let account = if let Some(context) = &self.pending_model_context
-            && (context.model_provider != "openai" || !context.requires_openai_auth)
-        {
-            GetAccountResponse {
-                account: None,
-                requires_openai_auth: context.requires_openai_auth,
-                workspace_routing: None,
-            }
-        } else {
-            account
-        };
+        // Retain the host identity across provider switches. Status presentation is scoped to
+        // the active thread without discarding the account needed when returning to OpenAI.
         let mut account = account;
         if let Some(context) = &self.pending_model_context {
             account.requires_openai_auth = context.requires_openai_auth;
@@ -986,6 +977,10 @@ impl AppServerSession {
                 .map_err(|err| {
                     bootstrap_request_error("thread/start failed during TUI bootstrap", err)
                 })?;
+        let requires_openai_auth = self
+            .pending_model_context
+            .as_ref()
+            .map(|context| context.requires_openai_auth);
         self.clear_pending_model_context();
         if history_support == ThreadHistorySupport::LegacyOnly {
             self.history_support = ThreadHistorySupport::LegacyOnly;
@@ -1004,6 +999,7 @@ impl AppServerSession {
             self.thread_params_mode(),
         )
         .await?;
+        started.session.requires_openai_auth = requires_openai_auth;
         if let Some(permissions) = selected_permissions {
             started.session.permission_profile = permissions;
         }
@@ -1233,6 +1229,10 @@ impl AppServerSession {
                 ));
             }
         };
+        let requires_openai_auth = self
+            .pending_model_context
+            .as_ref()
+            .map(|context| context.requires_openai_auth);
         self.clear_pending_model_context();
         let mut response = response;
         if presentation == ForkPresentation::Regular
@@ -1268,6 +1268,7 @@ impl AppServerSession {
             self.thread_params_mode(),
         )
         .await?;
+        started.session.requires_openai_auth = requires_openai_auth;
         if let Some(permissions) = selected_permissions {
             started.session.permission_profile = permissions;
         }
@@ -2669,6 +2670,7 @@ async fn thread_session_state_from_thread_response(
         thread_name,
         model,
         model_provider_id,
+        requires_openai_auth: None,
         service_tier,
         approval_policy,
         approvals_reviewer,

@@ -35,6 +35,8 @@ pub(crate) struct ThreadSessionState {
     pub(crate) thread_name: Option<String>,
     pub(crate) model: String,
     pub(crate) model_provider_id: String,
+    /// Server-resolved authentication requirement; absent for legacy or read-only metadata.
+    pub(crate) requires_openai_auth: Option<bool>,
     pub(crate) service_tier: Option<String>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,

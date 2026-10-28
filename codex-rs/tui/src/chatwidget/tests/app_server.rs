@@ -53,6 +53,7 @@ fn configured_thread_session(thread_id: ThreadId) -> crate::session_state::Threa
         thread_name: None,
         model: "gpt-5.2".to_string(),
         model_provider_id: "openai".to_string(),
+        requires_openai_auth: None,
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
@@ -123,6 +124,7 @@ async fn session_and_settings_sync_server_provider_id() {
     let mut first = configured_thread_session(first_id);
     first.model_provider_id = "server-ollama".to_string();
     chat.handle_thread_session(first.clone());
+    assert!(!chat.requires_openai_auth);
     let displayed = status(&mut chat);
     assert!(displayed.contains("Model provider:") && displayed.contains("server-ollama"));
     assert!(!displayed.contains("local-provider.example"));
@@ -2230,5 +2232,109 @@ async fn sqlite_log_write_warning_is_visible_in_warnings() {
     insta::assert_snapshot!(
         "sqlite_log_write_warning",
         super::helpers::render_bottom_popup(&chat, /*width*/ 80)
+    );
+}
+
+fn status_text(chat: &mut ChatWidget) -> String {
+    chat.add_status_output(false, None);
+    chat.transcript
+        .last_status_copy_targets
+        .as_ref()
+        .expect("status output")
+        .handle
+        .copy_text()
+}
+
+#[tokio::test]
+async fn status_scopes_host_account_and_limits_to_the_active_provider() {
+    let (mut chat, mut events, _ops) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let mut openai = configured_thread_session(ThreadId::new());
+    openai.requires_openai_auth = Some(true);
+    chat.handle_thread_session(openai.clone());
+    chat.update_account_state(
+        Some(StatusAccountDisplay::ChatGpt {
+            email: Some("host@example.com".into()),
+            plan: Some("Business".into()),
+        }),
+        Some(PlanType::Business),
+        true,
+        true,
+    );
+    chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
+    let displayed = status_text(&mut chat);
+    assert!(displayed.contains("host@example.com"));
+    assert!(displayed.contains("8% left"));
+    drain_insert_history(&mut events);
+
+    let mut custom = configured_thread_session(ThreadId::new());
+    custom.model_provider_id = "kimi".into();
+    custom.requires_openai_auth = Some(false);
+    chat.handle_thread_session_quiet(custom.clone());
+    // The host broadcasts account changes to every client, including custom-provider clients.
+    chat.update_account_state(
+        Some(StatusAccountDisplay::ChatGpt {
+            email: Some("new-host@example.com".into()),
+            plan: Some("Business".into()),
+        }),
+        Some(PlanType::Business),
+        true,
+        true,
+    );
+    chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
+    drain_insert_history(&mut events);
+    chat.dispatch_command(SlashCommand::Status);
+    let displayed = chat
+        .transcript
+        .last_status_copy_targets
+        .as_ref()
+        .expect("custom provider status")
+        .handle
+        .copy_text();
+    assert!(displayed.contains("kimi"));
+    assert!(!displayed.contains("new-host@example.com"));
+    assert!(!displayed.contains("8% left"));
+    assert!(!displayed.contains("chatgpt.com/codex/settings/usage"));
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(
+            event,
+            AppEvent::RefreshRateLimits { .. } | AppEvent::RefreshThreadUsage { .. }
+        ))
+    );
+    assert!(!chat.requires_openai_auth);
+
+    // A custom provider can itself require host authentication without using OpenAI billing.
+    custom.requires_openai_auth = Some(true);
+    chat.handle_thread_session_quiet(custom);
+    assert!(!status_text(&mut chat).contains("new-host@example.com"));
+    assert!(!chat.should_prefetch_rate_limits());
+    assert!(!chat.thread_usage_is_available());
+
+    chat.handle_thread_session_quiet(openai);
+    assert!(chat.requires_openai_auth);
+    let displayed = status_text(&mut chat);
+    assert!(displayed.contains("new-host@example.com"));
+    assert!(displayed.contains("8% left"));
+    assert!(chat.should_prefetch_rate_limits());
+}
+
+#[tokio::test]
+async fn status_respects_server_auth_requirement_for_the_same_provider() {
+    let (mut chat, _events, _ops) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let mut session = configured_thread_session(ThreadId::new());
+    session.requires_openai_auth = Some(false);
+    chat.handle_thread_session(session.clone());
+    chat.update_account_state(Some(StatusAccountDisplay::ApiKey), None, false, false);
+    assert!(!chat.requires_openai_auth);
+    assert!(!status_text(&mut chat).contains("Account:"));
+    session.requires_openai_auth = Some(true);
+    let thread_id = session.thread_id;
+    chat.handle_thread_session_quiet(session);
+    assert!(chat.requires_openai_auth);
+    assert!(status_text(&mut chat).contains("API key"));
+    let settings = thread_settings_for_test("gpt-5.2", thread_id);
+    chat.on_thread_settings_updated(settings);
+    assert!(
+        chat.requires_openai_auth,
+        "same-provider settings preserve resolved authentication"
     );
 }

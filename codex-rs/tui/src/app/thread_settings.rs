@@ -261,6 +261,9 @@ fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: 
         session.model = settings.model.clone();
         session.reasoning_effort = settings.effort.clone();
     }
+    if session.model_provider_id != settings.model_provider {
+        session.requires_openai_auth = None;
+    }
     session.model_provider_id = settings.model_provider.clone();
     session.service_tier = settings.service_tier.clone();
     session.approval_policy = settings.approval_policy;

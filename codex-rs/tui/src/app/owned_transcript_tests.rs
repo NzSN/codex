@@ -43,6 +43,7 @@ pub(in crate::app) fn attach_thread(app: &mut App, thread_id: ThreadId) {
         thread_name: None,
         model: "gpt-test".to_string(),
         model_provider_id: "test-provider".to_string(),
+        requires_openai_auth: None,
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
