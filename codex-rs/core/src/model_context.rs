@@ -8,6 +8,7 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_models_manager::ModelCatalogOriginator;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::model_context::ModelContextSnapshot;
 use codex_protocol::openai_models::ModelsResponse;
@@ -28,6 +29,8 @@ const MAX_INSTRUCTION_BYTES: usize = 64 * 1024;
 pub struct ResolvedModelContext {
     pub snapshot: ModelContextSnapshot,
     pub models_manager: SharedModelsManager,
+    unscoped_models_manager: SharedModelsManager,
+    catalog_originator: Option<ModelCatalogOriginator>,
     provider: ModelProviderInfo,
     api_key_model_discovery: bool,
 }
@@ -186,6 +189,7 @@ pub fn route_fingerprint(provider_id: &str, provider: &ModelProviderInfo) -> io:
             | "chatgpt-account-id"
             | "x-tenant-id"
             | "host"
+            | "originator"
             | "openai-beta"
             | "api-version" => {
                 headers.insert(name, value.as_str());
@@ -335,10 +339,38 @@ impl ResolvedModelContext {
         manager.set_api_key_model_discovery_enabled(api_key_model_discovery);
         Ok(Arc::new(Self {
             snapshot,
+            unscoped_models_manager: manager.clone(),
             models_manager: manager,
+            catalog_originator: None,
             provider: config.model_provider.clone(),
             api_key_model_discovery,
         }))
+    }
+
+    /// Keep the thread's authoritative binding and runtime manager aligned while
+    /// selecting an originator catalog. Unknown originators restore the default scope.
+    pub fn for_originator(self: &Arc<Self>, originator: &str) -> Arc<Self> {
+        let requested = ModelCatalogOriginator::from_originator(originator);
+        if requested == self.catalog_originator {
+            return self.clone();
+        }
+        let scoped =
+            requested.and_then(|scope| self.unscoped_models_manager.for_originator(scope.as_str()));
+        let (models_manager, catalog_originator) = match scoped {
+            Some(manager) => (manager, requested),
+            None => (self.unscoped_models_manager.clone(), None),
+        };
+        if Arc::ptr_eq(&models_manager, &self.models_manager) {
+            return self.clone();
+        }
+        Arc::new(Self {
+            snapshot: self.snapshot.clone(),
+            models_manager,
+            unscoped_models_manager: self.unscoped_models_manager.clone(),
+            catalog_originator,
+            provider: self.provider.clone(),
+            api_key_model_discovery: self.api_key_model_discovery,
+        })
     }
 
     pub fn matches_config(&self, config: &Config) -> bool {

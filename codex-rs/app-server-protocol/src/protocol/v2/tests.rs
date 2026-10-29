@@ -3055,6 +3055,7 @@ fn network_requirements_deserializes_legacy_fields() {
             dangerously_allow_non_loopback_proxy: None,
             dangerously_allow_all_unix_sockets: None,
             domains: None,
+            review_domains: None,
             managed_allowed_domains_only: None,
             allowed_domains: Some(vec!["api.openai.com".to_string()]),
             denied_domains: Some(vec!["blocked.example.com".to_string()]),
@@ -3081,6 +3082,7 @@ fn network_requirements_serializes_canonical_and_legacy_fields() {
                 NetworkDomainPermission::Deny,
             ),
         ])),
+        review_domains: Some(vec!["api.openai.com".to_string()]),
         managed_allowed_domains_only: Some(true),
         allowed_domains: Some(vec!["api.openai.com".to_string()]),
         denied_domains: Some(vec!["blocked.example.com".to_string()]),
@@ -3111,6 +3113,7 @@ fn network_requirements_serializes_canonical_and_legacy_fields() {
                 "api.openai.com": "allow",
                 "blocked.example.com": "deny"
             },
+            "reviewDomains": ["api.openai.com"],
             "managedAllowedDomainsOnly": true,
             "allowedDomains": ["api.openai.com"],
             "deniedDomains": ["blocked.example.com"],

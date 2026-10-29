@@ -11,6 +11,118 @@ fn catalog() -> ModelsResponse {
 }
 
 #[tokio::test]
+async fn originator_context_scoping_is_stable_and_can_restore_the_default() -> anyhow::Result<()> {
+    let home = tempfile::tempdir()?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(home.path().to_path_buf())
+        .build()
+        .await?;
+    let auth = AuthManager::from_auth_for_testing(
+        codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
+    let default = ResolvedModelContext::resolve(&config, auth, None)?;
+    let work = default.for_originator("codex_work_cca");
+    let chat = work.for_originator("chatgpt_cca");
+    assert!(!Arc::ptr_eq(&default.models_manager, &work.models_manager));
+    assert!(!Arc::ptr_eq(&work.models_manager, &chat.models_manager));
+    assert!(Arc::ptr_eq(&work, &work.for_originator("codex_work_cca")));
+    assert!(Arc::ptr_eq(
+        &default.models_manager,
+        &chat.for_originator("codex_cli_rs").models_manager
+    ));
+    assert!(work.matches_config(&config));
+    assert_eq!(default.snapshot, work.snapshot);
+    Ok(())
+}
+
+#[tokio::test]
+async fn scoped_native_catalog_retains_the_runtime_binding_for_custom_review() -> anyhow::Result<()>
+{
+    use codex_http_client::HttpClientFactory;
+    use codex_http_client::OutboundProxyPolicy;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let server = MockServer::start().await;
+    let home = tempfile::tempdir()?;
+    let mut config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(home.path().to_path_buf())
+        .build()
+        .await?;
+    config.features.disable(Feature::CodeMode)?;
+    config.features.disable(Feature::CodeModeHost)?;
+    config.features.enable(Feature::ApiKeyModelDiscovery)?;
+    config.features.disable(Feature::ShellSnapshot)?;
+    config.model_provider_id = "originator-catalog".into();
+    config.model_provider = ModelProviderInfo {
+        name: "Originator catalog".into(),
+        base_url: Some(server.uri()),
+        model_catalog_url: Some(format!("{}/catalog", server.uri()).into()),
+        experimental_bearer_token: Some("originator-test-key".into()),
+        requires_openai_auth: false,
+        ..ModelProviderInfo::create_openai_provider(None)
+    };
+    config.model_providers.insert(
+        config.model_provider_id.clone(),
+        config.model_provider.clone(),
+    );
+    config.model = Some("shared-model-name".into());
+    let threads = crate::test_support::thread_manager_with_models_provider_and_home(
+        codex_login::CodexAuth::from_api_key("originator-test-key"),
+        config.model_provider.clone(),
+        home.path().to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    config.resolved_model_context = Some(ResolvedModelContext::resolve(
+        &config,
+        threads.auth_manager(),
+        None,
+    )?);
+    for scope in ["codex_work_cca", "chatgpt_cca"] {
+        let mut response = catalog();
+        response.models[0].description = Some(scope.into());
+        Mock::given(method("GET"))
+            .and(path("/catalog"))
+            .and(header("originator", scope))
+            .respond_with(ResponseTemplate::new(200).set_body_json(response))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut options = crate::StartThreadOptions::new(config.clone());
+        options.metrics_service_name = Some(scope.into());
+        let started = threads.start_thread(options).await?;
+        let bound = started.thread.config().await;
+        let context = bound
+            .resolved_model_context
+            .as_ref()
+            .expect("runtime context");
+        let manager = &started.thread.session.services.models_manager;
+        assert!(Arc::ptr_eq(&context.models_manager, manager));
+        let info = manager
+            .get_model_info("shared-model-name", &bound.to_models_manager_config())
+            .await;
+        assert_eq!(info.description.as_deref(), Some(scope));
+        assert!(!info.used_fallback_model_metadata);
+        assert!(
+            !manager
+                .list_models(
+                    codex_models_manager::manager::RefreshStrategy::Offline,
+                    HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+                )
+                .await
+                .is_empty()
+        );
+        started.thread.shutdown_and_wait().await?;
+    }
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn discovery_settings_require_an_isolated_manager_and_compatible_binding()
 -> anyhow::Result<()> {
     let home = tempfile::tempdir()?;

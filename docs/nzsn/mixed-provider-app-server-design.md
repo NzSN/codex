@@ -263,6 +263,15 @@ metadata immediately and refreshes optional remote metadata in the background. I
 selection and explicit provider-native catalogs keep synchronous discovery and membership
 validation.
 
+The 0.165.0 integration also scopes dynamic catalogs by the thread's supported
+originator. Originator partitions remain separate from the default cache even when
+their endpoint/auth identity is identical. Context rebinding selects the same scoped
+manager for both the retained configuration and runtime session, preserving strict
+approval-review ownership. Repeating the same originator is stable; switching to an
+ordinary originator restores the unscoped manager. Static catalogs retain their
+authoritative snapshot. Resume-time discovery restores the saved thread originator
+before listing models.
+
 Do not put raw credentials into cache keys or logs. Invalidate auth-sensitive discovery state on account transitions and recheck current visibility. Static metadata can remain a snapshot while current authorization is reevaluated. Provider configuration changes create a new context; they do not mutate an existing thread's route.
 
 Provider discovery must not hold the registry's global lock across network I/O. Resolve independently, then atomically publish a validated context. Failed or cancelled resolution publishes no handle or thread. Duplicate concurrent requests may share bounded in-flight discovery only when their full scope identity agrees.

@@ -352,3 +352,91 @@ selection could not be accepted. Logs and the per-filter inventory are retained 
 binaries, rather than a fresh build in the merge worktree. The previously verified
 GNU Linux package has the same runtime source tree; the fork's musl release workflow
 was preserved but was not executed as part of this local merge qualification.
+
+## Upstream rust-v0.165.0 integration (2026-10-29)
+
+The upstream release is an annotated tag rather than a remote branch. Origin's tag
+object is `e374836b2728d9b7aa981c2902649e640a2edaa8`, resolving to commit
+`360319d8dee62d87e2d59fc0c21805d79519cfed`. The merge starts from NzSN main
+`71a2aeed7c94dfcff40b5b3ba883ac4a47ce5795`; both histories are retained. Workspace
+and path-package lockfile versions are updated to `0.165.0` without refreshing
+unrelated dependency selections.
+
+Nine conflicts were resolved by combining behavior:
+
+- Keep the fork's GitHub-only Linux release workflow. Upstream's conflicting edits
+  concern Python runtime wheels, which that fork workflow does not publish. The
+  workflow remains byte-identical to the pre-merge fork, and its symbol-stripping
+  policy remains intact.
+- Retain mixed-provider documentation alongside upstream's new memory-summary API.
+  Register both the new Vertex adapter and NzSN's context cache module.
+- Select models from the retained provider/catalog context before applying upstream's
+  originator scoping. The scoped manager is rebound into the context and runtime
+  together, preserving the approval-review pointer-identity guard. Custom-provider
+  wrappers delegate scoping; immutable static catalogs remain authoritative.
+- Partition context caches by provider/auth identity and originator, including when
+  the default and scoped endpoints have the same identity. Cache capacity, TTL,
+  current authentication checks, and discovery opt-outs are retained.
+- Preserve explicit provider/catalog/profile launch choices while adding upstream's
+  invocation-only approval-review defaults. A selected profile retains its reviewer
+  when there is no invocation override; an explicit invocation reviewer wins.
+- Retain upstream's native reviewer for the newly supported built-in GCP ID while
+  custom provider IDs, including Kimi, still use their captured parent model.
+- Regenerate stable/experimental protocol exports and Python SDK types from the
+  merged Rust definitions. Retain upstream's corrected Bedrock catalog expectations
+  rather than reintroducing stale duplicate V1 rows. Review the changed model-menu
+  snapshot hash after the upstream Terra catalog addition.
+
+The fork-only preservation inventory contains 190 paths: 180 retain their exact
+pre-merge bytes, while ten code/test/documentation paths receive the originator
+integration and its validation record. Shared upstream/fork files are checked by
+the targeted regression suites rather than resolved by preferring one entire side.
+
+Fresh Rust 1.99.1 builds compile the merged sources; the prior 0.164.0 test binaries
+are not used for this qualification. Selected runtime results comprise **646 distinct
+passing Rust tests**, with overlapping filters counted once:
+
+| Area | Passed |
+| --- | ---: |
+| Complete app-server protocol unit suite | 317 |
+| Complete model-manager unit suite | 56 |
+| Complete provider unit suite, including Vertex and originator caches | 124 |
+| Core context, originator, plaintext, projection, payload, delivery, role, and review units | 84 |
+| App-server context, mixed-provider, review, and attached-thread checks | 24 |
+| Core plaintext wire/scheduling, catalog parameters, and originator instruction scenarios | 8 |
+| TUI launch, provider selection, status, and startup defaults | 33 |
+
+The protocol suite has one ignored schema-writing helper, invoked separately for
+both stable and experimental regeneration. The canonical config-schema generator
+matches the merged fixture apart from its existing final newline. Python SDK types
+were regenerated with locked datamodel-code-generator `0.64.0`; managed Python 3.12
+download attempts timed out, so generation used Python 3.14.4 and the same locked
+dependency versions in an isolated environment.
+
+Affected core, app-server, TUI, CLI, provider, and model-manager crates passed
+`cargo check --tests --locked --offline` and `cargo clippy --tests --locked --offline`;
+the final Clippy run emitted no warnings. Workspace Rust formatting and whitespace
+checks passed. Every selected Rust group was checked against its nonempty test
+inventory and successful summary, including TUI tests that write terminal escapes
+around individual result lines.
+
+SDK validation records **268 passes, 38 opt-in real-Codex skips, and one unchanged
+upstream failure**. `test_root_format_driver_covers_all_formatter_groups` expects
+direct `rustfmt`, while the upstream `scripts/format.py` invokes `cargo fmt`. The
+failure was reproduced independently with both the test and driver copied directly
+from the upstream tag. Neither file was changed to hide the mismatch. Initial
+packaging-fixture failures due to `uv` missing from PATH passed after correcting
+the test environment.
+
+A cross-version fixture creates a durable catalog-backed plaintext conversation
+with the verified 0.164.0 package, removes its original catalog JSON and explicit
+payload-mode setting, and cold-resumes it with the current 0.165.0 app-server.
+The model, provider, and catalog digest survive. A subsequent cold resume with an
+explicit encrypted-mode override is rejected. A current 0.165.0 development host
+also executes `text(6 * 7)` over stdio, returns `42`, and shuts down cleanly.
+
+Detailed build logs, per-filter inventories, schema-generation records, the upstream
+formatter baseline, and cross-version receipts are retained under
+`.cache/upstream-0.165-merge/`. These are selected local checks, not a full workspace,
+native-Windows, Bazel, live-provider, or release-package qualification. The existing
+0.164.0 package and running daemon were not replaced by this source merge.

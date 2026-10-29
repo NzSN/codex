@@ -34,6 +34,7 @@ use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
 use crate::auth::resolve_provider_auth_for_scope;
 use crate::combined_auth::compose_auth;
+use crate::gcp::GcpModelProvider;
 use crate::models_endpoint::OpenAiModelsEndpoint;
 use crate::workspace_routing::WorkspaceRoutingContext;
 
@@ -101,6 +102,7 @@ pub fn approval_review_uses_parent_model(provider_id: &str) -> bool {
         codex_model_provider_info::OPENAI_PROVIDER_ID
             | codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID
             | codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID
+            | codex_model_provider_info::GCP_PROVIDER_ID
     )
 }
 
@@ -368,6 +370,9 @@ pub fn create_model_provider(
 ) -> SharedModelProvider {
     if provider_info.is_amazon_bedrock() {
         return Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager));
+    }
+    if provider_info.is_gcp() {
+        return Arc::new(GcpModelProvider::new(provider_info, auth_manager));
     }
     let gateway_auth_manager = provider_info.gateway_oauth.as_ref().map(|config| {
         provider_info.validate()?;
@@ -651,6 +656,21 @@ mod tests {
     use wiremock::matchers::header_regex;
     use wiremock::matchers::method;
     use wiremock::matchers::path;
+
+    #[test]
+    fn built_in_reviewers_include_vertex_while_custom_providers_use_the_parent() {
+        for provider in [
+            codex_model_provider_info::OPENAI_PROVIDER_ID,
+            codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID,
+            codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID,
+            codex_model_provider_info::GCP_PROVIDER_ID,
+        ] {
+            assert!(!approval_review_uses_parent_model(provider), "{provider}");
+        }
+        for provider in ["kimi", "deepseek", "custom-gcp"] {
+            assert!(approval_review_uses_parent_model(provider), "{provider}");
+        }
+    }
 
     use super::*;
     use crate::auth::AgentIdentitySessionFallback;
@@ -1270,6 +1290,7 @@ printf '%s\n' '{"AccessKeyId":"exported","SecretAccessKey":"secret"}'
         assert_eq!(uncached_catalog, catalog);
         for slug in [
             "openai.gpt-6.1-sol",
+            "openai.gpt-6.1-terra",
             "openai.gpt-6-sol",
             "openai.gpt-6-luna",
             "openai.gpt-5.6-sol",
@@ -1302,6 +1323,7 @@ printf '%s\n' '{"AccessKeyId":"exported","SecretAccessKey":"secret"}'
             vec![
                 ("openai.gpt-6.1-sol", "GPT-6.1 Sol"),
                 ("openai.gpt-6-astra", "GPT-6-Astra"),
+                ("openai.gpt-6.1-terra", "GPT-6.1 Terra"),
                 ("openai.gpt-6-sol", "GPT-6 Sol"),
                 ("openai.gpt-6-luna", "GPT-6 Luna"),
                 ("openai.gpt-5.6-sol", "GPT-5.6 Sol"),
@@ -1325,6 +1347,7 @@ printf '%s\n' '{"AccessKeyId":"exported","SecretAccessKey":"secret"}'
             vec![
                 "openai.gpt-6.1-sol",
                 "openai.gpt-6-astra",
+                "openai.gpt-6.1-terra",
                 "openai.gpt-6-sol",
                 "openai.gpt-6-luna",
                 "openai.gpt-5.6-sol",

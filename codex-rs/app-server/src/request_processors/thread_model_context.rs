@@ -41,11 +41,14 @@ impl ThreadRequestProcessor {
         let mut saved_model = None;
         let mut saved_provider = None;
         let mut saved_cwd = None;
+        let mut saved_originator = None;
         if let Some(id) = &params.thread_id {
             let thread_id =
                 ThreadId::from_string(id).map_err(|_| invalid_params("invalid threadId"))?;
             if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
-                saved_model = Some(thread.config_snapshot().await.model);
+                let snapshot = thread.config_snapshot().await;
+                saved_model = Some(snapshot.model);
+                saved_originator = Some(snapshot.originator);
                 saved_config = Some(thread.config().await);
                 saved_snapshot = saved_config
                     .as_ref()
@@ -61,8 +64,11 @@ impl ThreadRequestProcessor {
                 saved_model = stored.model.clone();
                 saved_cwd = Some(stored.cwd.clone());
                 let (history, _) = self
-                    .load_resume_initial_history_from_stored_thread(stored)
+                    .load_resume_initial_history_from_stored_thread(
+                        stored, /*prepared_model_context*/ None,
+                    )
                     .await?;
+                saved_originator = history.get_session_originator();
                 if saved_model.is_none() {
                     saved_model =
                         history
@@ -234,6 +240,11 @@ impl ThreadRequestProcessor {
             .await
             .map_err(|error| config_load_error(&error))?;
         config.model = selected_model;
+        if let Some(originator) = saved_originator
+            && let Some(context) = &config.resolved_model_context
+        {
+            config.resolved_model_context = Some(context.for_originator(&originator));
+        }
         let context = config.resolved_model_context.as_ref().ok_or_else(|| {
             context_error(
                 "modelContextConflict",

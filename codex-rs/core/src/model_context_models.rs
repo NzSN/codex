@@ -11,12 +11,19 @@ use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
+use std::sync::Arc;
 use tokio::sync::TryLockError;
 
 #[derive(Debug)]
 pub(super) struct ProviderCatalogModelsManager(pub(super) SharedModelsManager);
 
 impl ModelsManager for ProviderCatalogModelsManager {
+    fn for_originator(&self, originator: &str) -> Option<SharedModelsManager> {
+        self.0
+            .for_originator(originator)
+            .map(|manager| Arc::new(Self(manager)) as SharedModelsManager)
+    }
+
     fn set_api_key_model_discovery_enabled(&self, enabled: bool) {
         self.0.set_api_key_model_discovery_enabled(enabled);
     }

@@ -10,6 +10,7 @@ use codex_login::GatewayAuthConfig;
 use codex_login::GatewayAuthManager;
 use codex_model_provider_info::GatewayOAuthConfig;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
+use codex_models_manager::ModelCatalogOriginator;
 
 use crate::amazon_bedrock::AwsAuthRecovery;
 use crate::amazon_bedrock::AwsCredentialExport;
@@ -17,10 +18,16 @@ use crate::models_cache::ContextModelsCache;
 
 const MAX_CONTEXT_MODEL_CACHES: usize = 32;
 
+#[derive(Debug, PartialEq, Eq)]
+struct ContextCatalogKey {
+    identity: String,
+    originator: Option<ModelCatalogOriginator>,
+}
+
 /// Provider-owned runtime state shared across independently configured sessions.
 #[derive(Debug, Default)]
 pub(crate) struct ModelProviderSharedState {
-    model_catalogs: Mutex<VecDeque<(String, Arc<ContextModelsCache>)>>,
+    model_catalogs: Mutex<VecDeque<(ContextCatalogKey, Arc<ContextModelsCache>)>>,
     aws_credential_exports: Mutex<Vec<(ModelProviderAwsAuthInfo, Weak<AwsCredentialExport>)>>,
     aws_auth_recoveries: Mutex<Vec<(ModelProviderAwsAuthInfo, Weak<AwsAuthRecovery>)>>,
     gateway_managers: Mutex<
@@ -39,17 +46,29 @@ pub(crate) fn process_shared_state() -> &'static ModelProviderSharedState {
 
 impl ModelProviderSharedState {
     pub(crate) fn context_models_cache(&self, identity: String) -> Arc<ContextModelsCache> {
+        self.context_models_cache_for_originator(identity, None)
+    }
+
+    pub(crate) fn context_models_cache_for_originator(
+        &self,
+        identity: String,
+        originator: Option<ModelCatalogOriginator>,
+    ) -> Arc<ContextModelsCache> {
+        let key = ContextCatalogKey {
+            identity,
+            originator,
+        };
         let mut catalogs = self
             .model_catalogs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let cache = catalogs
             .iter()
-            .position(|(key, _)| key == &identity)
+            .position(|(cached, _)| cached == &key)
             .and_then(|index| catalogs.remove(index))
             .map(|(_, cache)| cache)
-            .unwrap_or_else(|| Arc::new(ContextModelsCache::new(identity.clone())));
-        catalogs.push_back((identity, cache.clone()));
+            .unwrap_or_else(|| Arc::new(ContextModelsCache::new(key.identity.clone())));
+        catalogs.push_back((key, cache.clone()));
         while catalogs.len() > MAX_CONTEXT_MODEL_CACHES {
             catalogs.pop_front();
         }

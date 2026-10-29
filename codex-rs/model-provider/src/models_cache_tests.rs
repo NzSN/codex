@@ -5,6 +5,7 @@ use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::openai_models::ModelsResponse;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
@@ -101,6 +102,30 @@ fn context_cache_registry_is_bounded_and_keeps_recent_scopes() {
 }
 
 #[tokio::test]
+async fn originator_partition_does_not_overwrite_default_even_when_identities_match() {
+    let state = ModelProviderSharedState::default();
+    let default = state.context_models_cache("same-endpoint-identity".into());
+    let work = state.context_models_cache_for_originator(
+        "same-endpoint-identity".into(),
+        Some(codex_models_manager::ModelCatalogOriginator::Work),
+    );
+    assert!(!Arc::ptr_eq(&default, &work));
+    let original = entry("same-endpoint-identity");
+    default.store(&original).await.unwrap();
+    work.store(&ModelsCacheEntry {
+        etag: Some("work".into()),
+        ..original.clone()
+    })
+    .await
+    .unwrap();
+    assert_eq!(default.load("1.0.0").await.unwrap(), Some(original));
+    assert_eq!(
+        work.load("1.0.0").await.unwrap().unwrap().etag.as_deref(),
+        Some("work")
+    );
+}
+
+#[tokio::test]
 async fn restored_managers_reuse_only_the_same_provider_and_credentials() {
     let server = MockServer::start().await;
     let factory = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault);
@@ -157,4 +182,71 @@ async fn restored_managers_reuse_only_the_same_provider_and_credentials() {
         );
         drop(mock);
     }
+}
+
+#[tokio::test]
+async fn restored_context_caches_keep_originator_catalogs_separate_and_warm() {
+    let server = MockServer::start().await;
+    let factory = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault);
+    let scopes = ["provider-default", "codex_work_cca", "chatgpt_cca"];
+    let mut catalogs = Vec::new();
+    for scope in scopes {
+        let mut model = model_info_from_slug("shared-model");
+        model.visibility = codex_protocol::openai_models::ModelVisibility::List;
+        model.description = Some(scope.into());
+        model.used_fallback_model_metadata = false;
+        model.model_messages = Some(codex_protocol::openai_models::ModelMessages {
+            instructions_template: Some(scope.into()),
+            ..Default::default()
+        });
+        let catalog = ModelsResponse {
+            models: vec![model],
+        };
+        Mock::given(method("GET"))
+            .and(path("/catalog"))
+            .and(header("originator", scope))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&catalog))
+            .expect(1)
+            .mount(&server)
+            .await;
+        catalogs.push(catalog);
+    }
+    let provider = ModelProviderInfo {
+        model_catalog_url: Some(format!("{}/catalog", server.uri()).into()),
+        experimental_bearer_token: Some("originator-cache-key".into()),
+        requires_openai_auth: false,
+        http_headers: Some(std::collections::HashMap::from([
+            ("originator".into(), "provider-default".into()),
+            (
+                codex_login::default_client::RESIDENCY_HEADER_NAME.into(),
+                "us".into(),
+            ),
+        ])),
+        ..ModelProviderInfo::create_openai_provider(Some(server.uri()))
+    };
+    for _ in 0..2 {
+        let manager =
+            create_model_provider(provider.clone(), None).models_manager_for_context(None);
+        manager.set_api_key_model_discovery_enabled(true);
+        for (index, scope) in scopes.into_iter().enumerate() {
+            let scoped = if index == 0 {
+                manager.clone()
+            } else {
+                manager.for_originator(scope).unwrap()
+            };
+            assert_eq!(
+                scoped
+                    .raw_model_catalog(RefreshStrategy::OnlineIfUncached, factory.clone())
+                    .await,
+                catalogs[index]
+            );
+        }
+        assert_eq!(
+            manager
+                .raw_model_catalog(RefreshStrategy::Offline, factory.clone())
+                .await,
+            catalogs[0]
+        );
+    }
+    server.verify().await;
 }

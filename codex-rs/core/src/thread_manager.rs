@@ -309,6 +309,8 @@ pub struct StartThreadOptions {
     pub history_mode: Option<ThreadHistoryMode>,
     pub session_source: Option<SessionSource>,
     pub thread_source: Option<ThreadSource>,
+    /// Creation metadata forwarded to storage; never inherited from a fork source.
+    pub attached_thread: bool,
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
@@ -340,6 +342,7 @@ impl StartThreadOptions {
             history_mode: None,
             session_source: None,
             thread_source: None,
+            attached_thread: false,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
             parent_trace: None,
@@ -2212,6 +2215,7 @@ impl ThreadManagerState {
             history_mode,
             session_source,
             thread_source,
+            attached_thread,
             dynamic_tools,
             metrics_service_name,
             parent_trace,
@@ -2493,6 +2497,17 @@ impl ThreadManagerState {
             }
             None => Arc::clone(&self.models_manager),
         };
+        let models_manager = match config.resolved_model_context.clone() {
+            Some(context) => {
+                let context = context.for_originator(&originator);
+                let manager = context.models_manager.clone();
+                config.resolved_model_context = Some(context);
+                manager
+            }
+            None => models_manager
+                .for_originator(&originator)
+                .unwrap_or(models_manager),
+        };
         if !allow_provider_model_fallback && let Some(context) = &config.resolved_model_context {
             context
                 .validate_static_model_selection(config.model.as_deref())
@@ -2529,6 +2544,7 @@ impl ThreadManagerState {
                 .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
         }
         let spawn_result = Session::spawn(SessionSpawnArgs {
+            attached_thread,
             startup,
             config,
             prompt_cache_key,

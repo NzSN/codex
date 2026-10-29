@@ -1,7 +1,8 @@
-//! First-thread model overrides come from invocation inputs, independently of local config.
+//! First-thread model, catalog, and approval choices come from invocation inputs.
 //! Profile defaults are resolved by the embedded server; explicit invocation choices still win.
 
 use crate::legacy_core::config::ConfigOverrides;
+use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_config::LoaderOverrides;
 
@@ -13,6 +14,14 @@ pub(crate) struct StartupLaunchChoices {
     pub(crate) catalog_json: Option<String>,
     pub(crate) model_context_id: Option<String>,
     selected_profile: bool,
+    pub(super) approvals_reviewer: StartupApprovalsReviewer,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(super) enum StartupApprovalsReviewer {
+    #[default]
+    Config,
+    Invocation(Option<ApprovalsReviewer>),
 }
 
 impl StartupLaunchChoices {
@@ -28,6 +37,11 @@ impl StartupLaunchChoices {
                 .find(|(path, _)| path == key)
                 .map(|(_, value)| value)
         };
+        let selected_profile = loader_overrides.user_config_profile.is_some();
+        let reviewer = harness_overrides
+            .approvals_reviewer
+            .or_else(|| value("approvals_reviewer")?.clone().try_into().ok())
+            .map(Into::into);
         Self {
             model: harness_overrides.model.clone().or_else(|| {
                 value("model")
@@ -45,7 +59,11 @@ impl StartupLaunchChoices {
                 .and_then(toml::Value::as_str)
                 .map(str::to_owned),
             model_context_id: None,
-            selected_profile: loader_overrides.user_config_profile.is_some(),
+            selected_profile,
+            approvals_reviewer: match (selected_profile, reviewer) {
+                (true, None) => StartupApprovalsReviewer::Config,
+                (_, reviewer) => StartupApprovalsReviewer::Invocation(reviewer),
+            },
         }
     }
 
@@ -90,6 +108,50 @@ pub(crate) fn is_model_selection_override(key: &str, value: &toml::Value) -> boo
 #[cfg(test)]
 mod mixed_provider_tests {
     use super::*;
+
+    #[test]
+    fn selected_profile_keeps_its_reviewer_without_an_invocation_override() {
+        let choices = StartupLaunchChoices::from_launch(
+            &[],
+            &ConfigOverrides::default(),
+            &LoaderOverrides {
+                user_config_profile: Some("work".parse().expect("profile")),
+                ..Default::default()
+            },
+        );
+        assert!(matches!(
+            choices.approvals_reviewer,
+            StartupApprovalsReviewer::Config
+        ));
+    }
+
+    #[test]
+    fn profile_and_mixed_provider_choices_keep_explicit_approval_review() {
+        let choices = StartupLaunchChoices::from_launch(
+            &[
+                ("model_provider".into(), toml::Value::String("kimi".into())),
+                (
+                    "model_catalog_json".into(),
+                    toml::Value::String("models.json".into()),
+                ),
+                (
+                    "approvals_reviewer".into(),
+                    toml::Value::String("auto_review".into()),
+                ),
+            ],
+            &ConfigOverrides::default(),
+            &LoaderOverrides {
+                user_config_profile: Some("work".parse().expect("profile")),
+                ..Default::default()
+            },
+        );
+        assert!(choices.requests_model_context());
+        assert!(choices.selected_profile);
+        assert!(matches!(
+            choices.approvals_reviewer,
+            StartupApprovalsReviewer::Invocation(Some(ApprovalsReviewer::AutoReview))
+        ));
+    }
 
     #[test]
     fn selected_profile_keeps_explicit_model_for_resolution_and_attachment() {

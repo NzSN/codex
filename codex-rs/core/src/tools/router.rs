@@ -447,6 +447,7 @@ impl ToolRouter {
             tool_name,
             source,
             payload,
+            environments: Default::default(),
         };
 
         self.registry

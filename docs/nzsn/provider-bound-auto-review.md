@@ -25,7 +25,7 @@ with the existing Guardian policy, structured decision contract, and authorizati
 ## Design
 
 1. **Make the provider selection policy explicit.** OpenAI and the built-in Bedrock
-   adapters retain their existing backend-specific reviewer selection. Other provider
+   and GCP (Vertex) adapters retain their backend-specific reviewer selection. Other provider
    IDs, including Kimi and local providers, use the action-time parent model. Their
    reviewer selection ignores bundled preferred models and `auto_review_model_override`;
    it retains the parent model metadata and supported reasoning settings. This policy
@@ -70,7 +70,9 @@ with the existing Guardian policy, structured decision contract, and authorizati
    If the reviewer fails or returns invalid output, the action remains blocked.
 
 No new public protocol fields, credential storage, provider endpoint defaults, or
-configuration switches are required. OpenAI and built-in Bedrock behavior is preserved.
+configuration switches are required. Built-in adapter behavior is preserved. The GCP
+exception was added with the upstream 0.165.0 integration; custom provider IDs still
+review with their captured parent model.
 
 ## Validation and acceptance
 

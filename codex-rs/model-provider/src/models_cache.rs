@@ -3,6 +3,7 @@
 use std::sync::Mutex;
 
 use chrono::Utc;
+use codex_models_manager::ModelCatalogOriginator;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::cache::ModelsCacheEntry;
 use codex_models_manager::cache::ModelsCacheError;
@@ -26,6 +27,17 @@ impl ContextModelsCache {
 }
 
 impl ModelsCache for ContextModelsCache {
+    fn for_originator_with_identity(
+        &self,
+        originator: ModelCatalogOriginator,
+        identity: Option<&str>,
+    ) -> Option<std::sync::Arc<dyn ModelsCache>> {
+        Some(
+            crate::shared_state::process_shared_state()
+                .context_models_cache_for_originator(identity?.into(), Some(originator)),
+        )
+    }
+
     fn load<'a>(
         &'a self,
         client_version: &'a str,
