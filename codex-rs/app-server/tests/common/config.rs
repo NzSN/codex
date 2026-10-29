@@ -8,6 +8,7 @@ pub struct MockResponsesConfig {
     provider_id: String,
     provider_name: String,
     provider_base_url: String,
+    builtin_openai: bool,
     model: String,
     approval_policy: String,
     sandbox_mode: String,
@@ -23,6 +24,7 @@ impl MockResponsesConfig {
             provider_id: "mock_provider".to_string(),
             provider_name: "Mock provider for test".to_string(),
             provider_base_url: format!("{server_uri}/v1"),
+            builtin_openai: false,
             model: "mock-model".to_string(),
             approval_policy: "never".to_string(),
             sandbox_mode: "read-only".to_string(),
@@ -35,6 +37,19 @@ impl MockResponsesConfig {
 
     pub fn with_model_provider(mut self, provider_id: &str) -> Self {
         self.provider_id = provider_id.to_string();
+        self.builtin_openai = false;
+        self
+    }
+
+    /// Exercise OpenAI-specific behavior without declaring a forbidden override
+    /// of the built-in provider in `model_providers`.
+    pub fn with_builtin_openai_provider(mut self) -> Self {
+        self.provider_id = "openai".to_owned();
+        self.builtin_openai = true;
+        // Local mock handlers consume JSON directly, without the production
+        // OpenAI endpoint's request decompression layer.
+        self.features
+            .insert(Feature::EnableRequestCompression, false);
         self
     }
 
@@ -102,6 +117,7 @@ impl MockResponsesConfig {
             provider_id,
             provider_name,
             provider_base_url,
+            builtin_openai,
             model,
             approval_policy,
             sandbox_mode,
@@ -110,7 +126,7 @@ impl MockResponsesConfig {
             provider_config,
             extra_config,
         } = self;
-        let root_config = root_config.join("\n");
+        let mut root_config = root_config.join("\n");
         let provider_config = provider_config.join("\n");
         let extra_config = extra_config.join("\n");
         let feature_entries = features
@@ -130,6 +146,20 @@ impl MockResponsesConfig {
         } else {
             format!("[features]\n{feature_entries}\n\n")
         };
+        let provider_config = if builtin_openai {
+            root_config.push_str(&format!("\nopenai_base_url = {provider_base_url:?}\n"));
+            String::new()
+        } else {
+            format!(
+                r#"[model_providers.{provider_id}]
+name = "{provider_name}"
+base_url = "{provider_base_url}"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+{provider_config}"#
+            )
+        };
 
         std::fs::write(
             codex_home.join("config.toml"),
@@ -141,12 +171,7 @@ sandbox_mode = "{sandbox_mode}"
 {root_config}
 model_provider = "{provider_id}"
 
-{feature_config}[model_providers.{provider_id}]
-name = "{provider_name}"
-base_url = "{provider_base_url}"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
+{feature_config}
 {provider_config}
 
 {extra_config}

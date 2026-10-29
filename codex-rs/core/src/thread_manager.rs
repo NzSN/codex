@@ -449,6 +449,9 @@ pub(crate) struct ThreadManagerState {
     agent_control_factory: Option<AgentControlFactory>,
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
+    // Only the startup provider/catalog can establish ownership for legacy
+    // callers. Per-thread overrides must bring their own resolved context.
+    default_model_context: Option<Arc<crate::model_context::ResolvedModelContext>>,
     git_root_discovery: Arc<GitRootDiscovery>,
     environment_manager: Arc<EnvironmentManager>,
     starting_mcp_runtimes: std::sync::Mutex<Vec<std::sync::Weak<AtomicBool>>>,
@@ -583,6 +586,26 @@ impl ThreadManager {
         external_time_provider: Option<Arc<dyn TimeProvider>>,
     ) -> Self {
         let codex_home = config.codex_home.clone();
+        let default_model_context = config.resolved_model_context.clone().or_else(|| {
+            (codex_model_provider::approval_review_uses_parent_model(&config.model_provider_id)
+                && (config.model_catalog.is_some()
+                    || config.model_provider.model_catalog_url.is_some()))
+            .then(|| {
+                // Context ownership is independent of the daemon's selected
+                // model. Validate selection at thread start, after overrides.
+                let mut binding_config = config.clone();
+                binding_config.model = None;
+                // Invalid startup metadata cannot authorize a legacy reviewer.
+                // A later explicitly resolved context remains available for recovery.
+                crate::model_context::ResolvedModelContext::resolve(
+                    &binding_config,
+                    auth_manager.clone(),
+                    None,
+                )
+                .ok()
+            })
+            .flatten()
+        });
         let restriction_product = session_source.restriction_product();
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let skills_service = Arc::new(HostSkillsService::new_with_restriction_product(
@@ -620,6 +643,7 @@ impl ThreadManager {
                 thread_id_generator: default_thread_id_generator(),
                 agent_control_factory: None,
                 models_manager,
+                default_model_context,
                 git_root_discovery: Arc::default(),
                 environment_manager,
                 starting_mcp_runtimes: std::sync::Mutex::new(Vec::new()),
@@ -809,6 +833,7 @@ impl ThreadManager {
                 agent_control_factory: None,
                 models_manager: create_model_provider(provider, Some(auth_manager.clone()))
                     .models_manager(codex_home, /*config_model_catalog*/ None),
+                default_model_context: None,
                 git_root_discovery: Arc::default(),
                 environment_manager,
                 starting_mcp_runtimes: std::sync::Mutex::new(Vec::new()),
@@ -1728,6 +1753,15 @@ impl ThreadManager {
 }
 
 impl ThreadManagerState {
+    pub(crate) fn restore_model_context(
+        &self,
+        config: &mut Config,
+        snapshot: codex_protocol::model_context::ModelContextSnapshot,
+    ) -> CodexResult<()> {
+        crate::model_context::restore_context_snapshot(config, self.auth_manager.clone(), snapshot)
+            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))
+    }
+
     pub(crate) fn shared_thread_instructions_provider(
         &self,
         root_thread_id: ThreadId,
@@ -2235,6 +2269,35 @@ impl ThreadManagerState {
             });
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         restore_resumed_multi_agent_task_payload(&mut config, &initial_history)?;
+        if config.resolved_model_context.is_none() {
+            let owner = match &initial_history {
+                InitialHistory::Resumed(history) => Some(history.conversation_id),
+                InitialHistory::Forked(_) => forked_from_thread_id,
+                _ => None,
+            };
+            let saved =
+                initial_history
+                    .get_rollout_items()
+                    .iter()
+                    .rev()
+                    .find_map(|item| match item {
+                        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
+                            if event.thread_id == owner && owner.is_some() =>
+                        {
+                            event.thread_settings.model_context.clone()
+                        }
+                        _ => None,
+                    });
+            if let Some(snapshot) = saved {
+                crate::model_context::restore_context_snapshot(
+                    &mut config,
+                    self.auth_manager.clone(),
+                    snapshot,
+                )
+                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+            }
+        }
+
         if reserved_thread_id.is_some() && matches!(&initial_history, InitialHistory::Resumed(_)) {
             return Err(CodexErr::InvalidRequest(
                 "reserved thread ID cannot be used when resuming a thread".to_string(),
@@ -2400,6 +2463,71 @@ impl ThreadManagerState {
         };
         let attachment_source =
             forked_from_thread_id.filter(|_| matches!(&initial_history, InitialHistory::Forked(_)));
+        // Preserve legacy startup selections without blessing a thread override
+        // that still uses the host's default manager. Catalog presence alone does
+        // not establish ownership when different providers share a model name.
+        if config.resolved_model_context.is_none()
+            && let Some(context) = self
+                .default_model_context
+                .as_ref()
+                .filter(|context| context.matches_config(&config))
+        {
+            config.resolved_model_context = Some(context.clone());
+        }
+        if config.resolved_model_context.is_some() {
+            crate::model_context::validate_managed_catalog(&config, config.model_catalog.as_ref())
+                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+        }
+        let models_manager = match config.resolved_model_context.clone() {
+            Some(context) if context.matches_config(&config) => context.models_manager.clone(),
+            Some(_) => {
+                let context = crate::model_context::ResolvedModelContext::resolve(
+                    &config,
+                    auth_manager.clone(),
+                    None,
+                )
+                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+                let manager = context.models_manager.clone();
+                config.resolved_model_context = Some(context);
+                manager
+            }
+            None => Arc::clone(&self.models_manager),
+        };
+        if !allow_provider_model_fallback && let Some(context) = &config.resolved_model_context {
+            context
+                .validate_static_model_selection(config.model.as_deref())
+                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+        }
+        if config.resolved_model_context.is_some()
+            && config.model_catalog.is_none()
+            && config.model_provider.model_catalog_url.is_some()
+        {
+            // A new provider's authoritative catalog must be warm before a child session's
+            // offline startup lookup. Never substitute bundled metadata after discovery fails.
+            let models = models_manager
+                .list_models(
+                    RefreshStrategy::OnlineIfUncached,
+                    config.http_client_factory(),
+                )
+                .await;
+            if models.is_empty()
+                || config
+                    .model
+                    .as_ref()
+                    .is_some_and(|selected| !models.iter().any(|model| model.model == *selected))
+            {
+                return Err(CodexErr::InvalidRequest(
+                    "selected model is unavailable in the provider catalog".into(),
+                ));
+            }
+        }
+        if config.resolved_model_context.is_some()
+            && !config.ephemeral
+            && matches!(config.experimental_thread_store, ThreadStoreConfig::Local)
+        {
+            crate::model_context::require_store_version(&config)
+                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+        }
         let spawn_result = Session::spawn(SessionSpawnArgs {
             startup,
             config,
@@ -2408,7 +2536,7 @@ impl ThreadManagerState {
             instructions,
             installation_id: self.installation_id.clone(),
             auth_manager,
-            models_manager: Arc::clone(&self.models_manager),
+            models_manager,
             git_root_discovery: Arc::clone(&self.git_root_discovery),
             environment_manager: Arc::clone(&self.environment_manager),
             skills_service: Arc::clone(&self.skills_service),

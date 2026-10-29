@@ -8,6 +8,7 @@ mod events;
 mod external_agent_config;
 pub(crate) mod fs;
 mod history;
+mod model_context;
 mod models;
 pub(crate) mod provider_selection;
 #[cfg(test)]
@@ -15,7 +16,7 @@ pub(crate) mod provider_selection;
 mod provider_selection_tests;
 mod realtime;
 mod rollout_history;
-mod startup_launch;
+pub(crate) mod startup_launch;
 mod thread_list;
 mod web_search;
 
@@ -334,6 +335,17 @@ pub(crate) struct AppServerSession {
     thread_params_mode: ThreadParamsMode,
     /// Explicit CLI provider selection, distinct from resolved configuration defaults.
     pub(crate) model_provider_override: Option<String>,
+    pub(crate) launch_model_choices: StartupLaunchChoices,
+    pub(crate) pending_model_context:
+        Option<codex_app_server_protocol::ModelContextResolveResponse>,
+    pub(crate) pending_model_target: Option<(
+        codex_app_server_protocol::ModelContextIntent,
+        Option<ThreadId>,
+    )>,
+    pub(crate) bootstrap_model_target: (
+        codex_app_server_protocol::ModelContextIntent,
+        Option<ThreadId>,
+    ),
     history_support: ThreadHistorySupport,
     pub(crate) thread_settings_update_supported: bool,
     default_model: Option<String>,
@@ -457,6 +469,10 @@ impl AppServerSession {
             remote_cwd_override: None,
             thread_params_mode,
             model_provider_override: None,
+            launch_model_choices: StartupLaunchChoices::default(),
+            pending_model_context: None,
+            pending_model_target: None,
+            bootstrap_model_target: (codex_app_server_protocol::ModelContextIntent::Start, None),
             history_support: ThreadHistorySupport::Paginated,
             thread_settings_update_supported: true,
             default_model: None,
@@ -617,6 +633,8 @@ impl AppServerSession {
     /// Carry capabilities that may exist only in memory when the optional cache is unwritable.
     pub(crate) fn inherit_task_tool_capabilities(&mut self, previous: &Self) {
         self.task_tool_threads.extend(&previous.task_tool_threads);
+        self.launch_model_choices = previous.launch_model_choices.clone();
+        // Pending handles belong to the previous connection and are never inherited.
     }
 
     pub(crate) fn task_tools_available(&self, thread_id: ThreadId) -> bool {
@@ -704,6 +722,16 @@ impl AppServerSession {
         let started_at = Instant::now();
         // `hooks/list` holds the global config queue during startup. Submit models and config
         // requirements together so an uncached model fetch can overlap both config requests.
+        self.ensure_model_context(
+            config,
+            self.bootstrap_model_target.0,
+            self.bootstrap_model_target.1,
+        )
+        .await?;
+        let model_context_id = self
+            .pending_model_context
+            .as_ref()
+            .map(|context| context.model_context_id.clone());
         let model_request_id = self.next_request_id();
         let requirements_request_id = self.next_request_id();
         let (models, requirements, collaboration_modes) = tokio::try_join!(
@@ -712,6 +740,8 @@ impl AppServerSession {
                     .request_typed::<ModelListResponse>(ClientRequest::ModelList {
                         request_id: model_request_id,
                         params: ModelListParams {
+                            model_context_id,
+                            thread_id: None,
                             cursor: None,
                             limit: None,
                             include_hidden: Some(true),
@@ -749,7 +779,11 @@ impl AppServerSession {
             &mut available_models,
             &requirements,
         );
-        if matches!(account.account, Some(Account::ApiKey {})) {
+        if matches!(account.account, Some(Account::ApiKey {}))
+            && self.pending_model_context.as_ref().is_none_or(|context| {
+                context.model_provider == "openai" && context.requires_openai_auth
+            })
+        {
             available_models = self
                 .constrain_api_key_models(
                     config,
@@ -763,9 +797,8 @@ impl AppServerSession {
             .requirements
             .and_then(|requirements| requirements.models)
             .and_then(|models| models.new_thread);
-        let default_model = config
-            .model
-            .clone()
+        let default_model = self.pending_model_context.as_ref().map(|context| context.model.clone())
+            .or_else(|| config.model.clone())
             .or_else(|| {
                 available_models
                     .iter()
@@ -781,6 +814,12 @@ impl AppServerSession {
                     .and_then(|defaults| defaults.model.clone()),
             })
             .wrap_err("No models are available. Set `model` explicitly or check your model catalog configuration.")?;
+        // Retain the host identity across provider switches. Status presentation is scoped to
+        // the active thread without discarding the account needed when returning to OpenAI.
+        let mut account = account;
+        if let Some(context) = &self.pending_model_context {
+            account.requires_openai_auth = context.requires_openai_auth;
+        }
         self.default_model = Some(default_model.clone());
         self.available_models = available_models.clone();
 
@@ -896,6 +935,12 @@ impl AppServerSession {
         remote_cwd_override: Option<&std::path::Path>,
         selected_profile: Option<&PermissionProfileSelection>,
     ) -> Result<AppServerStartedThread> {
+        self.ensure_model_context(
+            config,
+            codex_app_server_protocol::ModelContextIntent::Start,
+            None,
+        )
+        .await?;
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(config);
         let mut params = thread_start_params_from_config(
@@ -920,6 +965,9 @@ impl AppServerSession {
         if self.history_support == ThreadHistorySupport::LegacyOnly {
             params.history_mode = None;
         }
+        if let Some(context) = &self.pending_model_context {
+            super::app_server_session::model_context::configure_start_context(&mut params, context);
+        }
         self.thread_tool_transport().validate_config(config)?;
         self.thread_tool_transport().configure(&mut params);
         let request_handle = self.request_handle();
@@ -929,6 +977,11 @@ impl AppServerSession {
                 .map_err(|err| {
                     bootstrap_request_error("thread/start failed during TUI bootstrap", err)
                 })?;
+        let requires_openai_auth = self
+            .pending_model_context
+            .as_ref()
+            .map(|context| context.requires_openai_auth);
+        self.clear_pending_model_context();
         if history_support == ThreadHistorySupport::LegacyOnly {
             self.history_support = ThreadHistorySupport::LegacyOnly;
         }
@@ -946,6 +999,7 @@ impl AppServerSession {
             self.thread_params_mode(),
         )
         .await?;
+        started.session.requires_openai_auth = requires_openai_auth;
         if let Some(permissions) = selected_permissions {
             started.session.permission_profile = permissions;
         }
@@ -1123,6 +1177,27 @@ impl AppServerSession {
             params.approvals_reviewer = selected_profile.approvals_reviewer.map(Into::into);
             remove_permission_config_overrides(&mut params.config);
         }
+        if config_source == ForkConfigSource::Session {
+            self.ensure_inherited_model_context(
+                &config,
+                codex_app_server_protocol::ModelContextIntent::Fork,
+                Some(thread_id),
+            )
+            .await?;
+        } else {
+            self.ensure_model_context(
+                &config,
+                codex_app_server_protocol::ModelContextIntent::Fork,
+                Some(thread_id),
+            )
+            .await?;
+        }
+        if let Some(context) = &self.pending_model_context {
+            params.model_context_id = Some(context.model_context_id.clone());
+            params.model = None;
+            params.model_provider = None;
+            model_context::remove_model_choices(&mut params.config);
+        }
         self.thread_tool_transport()
             .configure_mcp(&mut params.config);
         let response: ThreadForkResponse = match self
@@ -1154,6 +1229,11 @@ impl AppServerSession {
                 ));
             }
         };
+        let requires_openai_auth = self
+            .pending_model_context
+            .as_ref()
+            .map(|context| context.requires_openai_auth);
+        self.clear_pending_model_context();
         let mut response = response;
         if presentation == ForkPresentation::Regular
             && !response.thread.ephemeral
@@ -1188,6 +1268,7 @@ impl AppServerSession {
             self.thread_params_mode(),
         )
         .await?;
+        started.session.requires_openai_auth = requires_openai_auth;
         if let Some(permissions) = selected_permissions {
             started.session.permission_profile = permissions;
         }
@@ -2589,6 +2670,7 @@ async fn thread_session_state_from_thread_response(
         thread_name,
         model,
         model_provider_id,
+        requires_openai_auth: None,
         service_tier,
         approval_policy,
         approvals_reviewer,
@@ -4186,6 +4268,7 @@ mod tests {
         let forked_from_id = ThreadId::new();
         let read_only_profile = PermissionProfile::read_only();
         let response = ThreadResumeResponse {
+            model_context: None,
             disabled_plugin_ids: Vec::new(),
             thread: codex_app_server_protocol::Thread {
                 originator: None,

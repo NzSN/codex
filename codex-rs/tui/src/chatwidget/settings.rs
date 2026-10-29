@@ -207,6 +207,24 @@ impl ChatWidget {
         self.refresh_model_dependent_surfaces();
     }
 
+    /// Host accounts and usage APIs are shared; only the OpenAI account-backed route uses them.
+    pub(super) fn active_provider_uses_openai_account(&self) -> bool {
+        self.config.model_provider_id == "openai" && self.requires_openai_auth
+    }
+
+    pub(super) fn sync_provider_auth_requirement(
+        &mut self,
+        provider_id: &str,
+        requires_openai_auth: Option<bool>,
+    ) {
+        if let Some(requires_openai_auth) = requires_openai_auth {
+            self.requires_openai_auth = requires_openai_auth;
+        } else if self.config.model_provider_id != provider_id {
+            // Never inherit another provider's requirement from incomplete read-only metadata.
+            self.requires_openai_auth = false;
+        }
+    }
+
     pub(crate) fn status_account_display(&self) -> Option<&StatusAccountDisplay> {
         self.status_account_display.as_ref()
     }
@@ -258,6 +276,7 @@ impl ChatWidget {
         self.add_credits_nudge_email_in_flight = None;
         self.codex_rate_limit_reached_type = None;
         self.codex_spend_control_reached = None;
+        self.rate_limit_snapshots_by_limit_id.clear();
         self.rate_limit_warnings = RateLimitWarningState::default();
         self.usage_notice_state = usage_notice::UsageNoticeState::default();
         self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
@@ -499,6 +518,7 @@ impl ChatWidget {
         self.invalidate_permission_discovery();
         let cwd_changed = self.config.cwd != settings.cwd;
         self.apply_thread_settings_cwd(settings.cwd.clone());
+        self.sync_provider_auth_requirement(&settings.model_provider, None);
         self.config.model_provider_id = settings.model_provider.clone();
         self.set_service_tier(settings.service_tier.clone());
         if let Err(err) = self

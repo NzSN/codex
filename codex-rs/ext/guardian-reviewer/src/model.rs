@@ -14,6 +14,33 @@ pub struct ReviewModel {
     pub model_override: Option<String>,
 }
 
+/// Keep a custom provider's reviewer on the captured parent model, including when
+/// unrelated bundled metadata advertises an override or a preferred OpenAI model.
+pub fn select_parent_review_model(
+    parent_model: &ModelInfo,
+    parent_reasoning_effort: Option<&ReasoningEffort>,
+) -> ReviewModel {
+    let reasoning_effort = if parent_model
+        .supported_reasoning_levels
+        .iter()
+        .any(|preset| preset.effort == ReasoningEffort::Low)
+    {
+        Some(ReasoningEffort::Low)
+    } else {
+        parent_reasoning_effort
+            .or(parent_model.default_reasoning_level.as_ref())
+            .cloned()
+    };
+    ReviewModel {
+        model: parent_model.slug.clone(),
+        reasoning_effort,
+        default_review_model_id: parent_model.slug.clone(),
+        catalog_contains_auto_review: false,
+        model_overridden: false,
+        model_override: None,
+    }
+}
+
 /// Prefers the review model and low effort when advertised; preserves the parent fallback.
 pub fn select_review_model(
     parent_model: &ModelInfo,

@@ -192,6 +192,8 @@ async fn status_command_overlapping_refreshes_update_matching_cells_only() {
 async fn account_update_rejects_stale_status_rate_limit_snapshots() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
+    chat.on_rate_limit_snapshot(Some(snapshot(20.0)));
+    drain_insert_history(&mut rx);
     chat.dispatch_command(SlashCommand::Status);
     assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
     let request_id = match rx.try_recv() {

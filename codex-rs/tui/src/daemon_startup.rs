@@ -93,26 +93,31 @@ pub(super) fn config_exclusion(
     strict_config: bool,
     bypass_hook_trust: bool,
 ) -> Option<&'static str> {
-    if !cli_kv_overrides
-        .iter()
-        .all(|(key, value)| match key.as_str() {
-            "suppress_unstable_features_warning" | "tui.fullscreen_transcript" => value.is_bool(),
-            "tui" => value.as_table().is_some_and(|tui| {
-                tui.len() == 1
-                    && tui
-                        .get("fullscreen_transcript")
-                        .is_some_and(toml::Value::is_bool)
-            }),
-            "features" => value.as_table().is_some_and(|features| {
-                !features.is_empty() && features.values().all(toml::Value::is_bool)
-            }),
-            _ => {
-                key.strip_prefix("features.")
-                    .is_some_and(|name| !name.contains('.'))
-                    && value.is_bool()
+    if !cli_kv_overrides.iter().all(|(key, value)| {
+        if crate::app_server_session::startup_launch::is_model_selection_override(key, value) {
+            true
+        } else {
+            match key.as_str() {
+                "suppress_unstable_features_warning" | "tui.fullscreen_transcript" => {
+                    value.is_bool()
+                }
+                "tui" => value.as_table().is_some_and(|tui| {
+                    tui.len() == 1
+                        && tui
+                            .get("fullscreen_transcript")
+                            .is_some_and(toml::Value::is_bool)
+                }),
+                "features" => value.as_table().is_some_and(|features| {
+                    !features.is_empty() && features.values().all(toml::Value::is_bool)
+                }),
+                _ => {
+                    key.strip_prefix("features.")
+                        .is_some_and(|name| !name.contains('.'))
+                        && value.is_bool()
+                }
             }
-        })
-    {
+        }
+    }) {
         Some("command-line configuration overrides (-c, --enable, --disable, or --search)")
     } else if !loader_overrides_are_default(loader_overrides) {
         Some("custom configuration loader")

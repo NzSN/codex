@@ -50,6 +50,68 @@ fn session_flags_layer_count(config: &Config) -> usize {
 }
 
 #[tokio::test]
+async fn provider_changing_role_cannot_drop_the_managed_catalog() {
+    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    let catalog = codex_models_manager::bundled_models_response().expect("catalog");
+    let required_path = home.path().join("required-models.json");
+    fs::write(
+        &required_path,
+        serde_json::to_vec(&catalog).expect("catalog JSON"),
+    )
+    .expect("required catalog");
+    config.model_catalog = Some(catalog);
+    let mut requirements = config.config_layer_stack.requirements().clone();
+    requirements.model_catalog_json = Some(codex_config::Sourced::new(
+        required_path.try_into().expect("absolute path"),
+        codex_config::RequirementSource::Unknown,
+    ));
+    let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
+    requirements_toml.model_catalog_json = requirements
+        .model_catalog_json
+        .as_ref()
+        .map(|required| required.value.clone());
+    config.config_layer_stack = ConfigLayerStack::new(
+        config
+            .config_layer_stack
+            .all_layers_low_to_high()
+            .cloned()
+            .collect(),
+        requirements,
+        requirements_toml,
+    )
+    .expect("requirements");
+    let auth = codex_login::AuthManager::from_auth_for_testing(
+        codex_login::CodexAuth::from_api_key("fixture-key"),
+    );
+    config.resolved_model_context = Some(
+        crate::model_context::ResolvedModelContext::resolve(&config, auth, None)
+            .expect("parent context"),
+    );
+    let path = write_role_config(
+        &home,
+        "provider-only.toml",
+        "model_provider = 'ollama'\nmodel = 'other-model'\n",
+    )
+    .await;
+    config.agent_roles.insert(
+        "provider-only".into(),
+        AgentRoleConfig {
+            config_file: Some(path),
+            ..Default::default()
+        },
+    );
+    let before = config.clone();
+    let error = apply_role_to_config(&mut config, Some("provider-only"))
+        .await
+        .expect_err("mandatory catalog cannot be removed");
+    assert!(error.contains("managed requirements"), "{error}");
+    assert_eq!(
+        config, before,
+        "rejected roles do not partially change parent-derived config"
+    );
+}
+
+#[tokio::test]
 async fn apply_role_defaults_to_default_and_leaves_config_unchanged() {
     let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
     let before = config.clone();

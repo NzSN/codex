@@ -95,6 +95,7 @@ impl App {
                 thread_name: None,
                 model: self.chat_widget.current_model().to_string(),
                 model_provider_id: self.config.model_provider_id.clone(),
+                requires_openai_auth: None,
                 service_tier: self.chat_widget.current_service_tier().map(str::to_string),
                 approval_policy: AskForApproval::from(
                     self.config.permissions.approval_policy.value(),
@@ -117,6 +118,9 @@ impl App {
         session.thread_id = thread_id;
         session.daybreak_enabled = thread.daybreak_enabled.unwrap_or(false);
         session.thread_name = thread.name.clone();
+        if session.model_provider_id != thread.model_provider {
+            session.requires_openai_auth = None;
+        }
         session.model_provider_id = thread.model_provider.clone();
         session.set_cwd_retargeting_implicit_runtime_workspace_root(thread.cwd.clone());
         session.permission_profile = permission_profile;
@@ -181,6 +185,7 @@ mod tests {
             thread_name: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
+            requires_openai_auth: None,
             service_tier: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,

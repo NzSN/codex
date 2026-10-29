@@ -33,6 +33,7 @@ pub(crate) use circuit_breaker::GuardianRejectionCircuitBreaker;
 pub(crate) use circuit_breaker::GuardianRejectionCircuitBreakerAction;
 pub(crate) use circuit_breaker::GuardianRejectionCircuitBreakerPolicy;
 pub use model::ReviewModel;
+pub use model::select_parent_review_model;
 pub use model::select_review_model;
 pub use outcome::GuardianReviewError;
 pub use outcome::GuardianReviewOutcome;

@@ -60,6 +60,9 @@ pub enum ThreadStartSource {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadStartParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub model_context_id: Option<String>,
     #[ts(optional = nullable)]
     pub model: Option<String>,
     #[ts(optional = nullable)]
@@ -186,6 +189,9 @@ pub struct MockExperimentalMethodResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadStartResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model_context: Option<super::model::ModelContextInfo>,
     pub thread: Thread,
     pub model: String,
     pub model_provider: String,
@@ -352,6 +358,9 @@ pub struct ThreadSettingsUpdatedNotification {
 ///
 /// Prefer using thread_id whenever possible.
 pub struct ThreadResumeParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub model_context_id: Option<String>,
     pub thread_id: String,
 
     /// [UNSTABLE] FOR CODEX CLOUD - DO NOT USE.
@@ -434,6 +443,9 @@ pub struct ThreadResumeParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadResumeResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model_context: Option<super::model::ModelContextInfo>,
     pub thread: Thread,
     pub model: String,
     pub model_provider: String,
@@ -542,6 +554,9 @@ impl From<ThreadTurnsListResponse> for TurnsPage {
 ///
 /// Prefer using thread_id whenever possible.
 pub struct ThreadForkParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub model_context_id: Option<String>,
     pub thread_id: String,
 
     /// Start from the loaded parent's effective config, tools, environments, and
@@ -645,6 +660,9 @@ pub struct ThreadForkParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadForkResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model_context: Option<super::model::ModelContextInfo>,
     pub thread: Thread,
     pub model: String,
     pub model_provider: String,

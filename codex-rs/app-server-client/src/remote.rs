@@ -152,6 +152,7 @@ enum RemoteClientCommand {
 
 #[derive(Default)]
 struct RemoteServerMetadata {
+    mixed_provider_app_server: Option<u32>,
     server_version: Option<String>,
     codex_home: Option<String>,
     platform_family: Option<String>,
@@ -218,6 +219,10 @@ impl RemoteAppServerClient {
                     .await
             }
         }
+    }
+
+    pub fn mixed_provider_app_server_version(&self) -> Option<u32> {
+        self.metadata.mixed_provider_app_server
     }
 
     pub fn server_version(&self) -> Option<&str> {
@@ -889,6 +894,8 @@ where
                                 .map(str::to_string);
                             metadata.platform_family = response.result.get("platformFamily")
                                 .and_then(serde_json::Value::as_str).map(str::to_string);
+                            metadata.mixed_provider_app_server = response.result.pointer("/serverCapabilities/mixedProviderAppServer")
+                                .and_then(serde_json::Value::as_u64).and_then(|version| u32::try_from(version).ok());
                             metadata.platform_os = response.result.get("platformOs")
                                 .and_then(serde_json::Value::as_str).map(str::to_string);
                             break Ok(());

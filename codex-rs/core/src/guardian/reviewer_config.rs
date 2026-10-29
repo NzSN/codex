@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use codex_features::Feature;
 use codex_guardian_reviewer::guardian_output_contract_prompt;
+use codex_model_provider::approval_review_uses_parent_model;
 use codex_prompts::GuardianPolicyInstructions;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::models::BaseInstructionsProvenance;
@@ -94,6 +95,15 @@ pub(crate) async fn resolve_review_model(
     Arc<codex_protocol::openai_models::ModelInfo>,
 ) {
     let turn = context.turn();
+    if approval_review_uses_parent_model(&turn.config.model_provider_id) {
+        return (
+            codex_guardian_reviewer::select_parent_review_model(
+                &context.model_info,
+                context.reasoning_effort.as_ref(),
+            ),
+            Arc::clone(&context.model_info),
+        );
+    }
     let available_models = session
         .services
         .models_manager
@@ -127,4 +137,41 @@ pub(crate) async fn resolve_review_model(
             )
         };
     (review_model, guardian_model_info)
+}
+
+/// Legacy sessions may retain their provider and model without retaining their
+/// catalog. Do not construct a custom-provider reviewer from OpenAI fallback data.
+pub(super) fn ensure_provider_review_catalog(
+    config: &Config,
+    parent_model: &codex_protocol::openai_models::ModelInfo,
+    models_manager: &codex_models_manager::manager::SharedModelsManager,
+) -> anyhow::Result<()> {
+    if !approval_review_uses_parent_model(&config.model_provider_id) {
+        return Ok(());
+    }
+    let has_model = config.model_catalog.as_ref().map_or_else(
+        || config.model_provider.model_catalog_url.is_some(),
+        |catalog| {
+            catalog
+                .models
+                .iter()
+                .any(|model| model.slug == parent_model.slug)
+        },
+    );
+    let has_runtime_binding = config
+        .resolved_model_context
+        .as_ref()
+        .is_some_and(|context| {
+            context.matches_config(config) && Arc::ptr_eq(&context.models_manager, models_manager)
+        });
+    anyhow::ensure!(
+        has_runtime_binding && has_model && !parent_model.used_fallback_model_metadata,
+        "Automatic approval review for provider `{}` requires its own model catalog containing `{}`, bound to the runtime model manager. \
+         Use `modelContext/resolve` and attach its `modelContextId`. With the current CLI, unload \
+         the thread and resume with an explicit `model_catalog_json`, or configure the provider's \
+         `model_catalog_url` before resolving. The bundled OpenAI catalog cannot be used for this reviewer.",
+        config.model_provider_id,
+        parent_model.slug,
+    );
+    Ok(())
 }

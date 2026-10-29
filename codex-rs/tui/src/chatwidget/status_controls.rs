@@ -239,20 +239,26 @@ impl ChatWidget {
                 .or_else(|| self.config.model_reasoning_effort.clone())
                 .or(model_default_reasoning_effort),
         );
-        let rate_limit_snapshots: Vec<RateLimitSnapshotDisplay> = self
-            .rate_limit_snapshots_by_limit_id
-            .values()
-            .cloned()
-            .collect();
+        let uses_openai_account = self.active_provider_uses_openai_account();
+        let rate_limit_snapshots: Vec<RateLimitSnapshotDisplay> = if uses_openai_account {
+            self.rate_limit_snapshots_by_limit_id
+                .values()
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
         let agents_summary =
             crate::status::compose_agents_summary(&self.config, &self.instruction_source_paths);
         let (cell, handle) = crate::status::new_status_output_with_rate_limits_handle(
             &self.config,
-            self.requires_openai_auth,
+            uses_openai_account,
             self.thread_id
                 .map(|_| self.config.model_provider_id.as_str()),
             self.remote_connection.as_ref(),
-            self.status_account_display.as_ref(),
+            self.status_account_display
+                .as_ref()
+                .filter(|_| uses_openai_account),
             token_info,
             total_usage,
             &self.thread_id,

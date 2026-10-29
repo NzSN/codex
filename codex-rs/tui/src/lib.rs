@@ -1321,6 +1321,53 @@ async fn run_ratatui_app(
         }
     }
     app_server_session.model_provider_override = overrides.model_provider.clone();
+    app_server_session.launch_model_choices = app_server_session::StartupLaunchChoices::from_launch(
+        &cli_kv_overrides,
+        &overrides,
+        &loader_overrides,
+    );
+    let early_resume_target = cli
+        .resume_session_id
+        .as_deref()
+        .and_then(|id| ThreadId::from_string(id).ok())
+        .map(|id| (codex_app_server_protocol::ModelContextIntent::Resume, id))
+        .or_else(|| {
+            cli.fork_session_id
+                .as_deref()
+                .and_then(|id| ThreadId::from_string(id).ok())
+                .map(|id| (codex_app_server_protocol::ModelContextIntent::Fork, id))
+        });
+    let defer_model_login = (cli.resume_picker
+        || cli.resume_last
+        || cli.resume_session_id.is_some()
+        || cli.fork_picker
+        || cli.fork_last
+        || cli.fork_session_id.is_some())
+        && app_server_session.supports_mixed_model_contexts();
+    if app_server_session
+        .launch_model_choices
+        .requests_model_context()
+        || (early_resume_target.is_some() && defer_model_login)
+    {
+        let (intent, target) = early_resume_target
+            .map(|(intent, target)| (intent, Some(target)))
+            .unwrap_or((codex_app_server_protocol::ModelContextIntent::Start, None));
+        let resolution = startup_draft
+            .run_until(
+                &mut tui,
+                app_server_session.ensure_model_context(&initial_config, intent, target),
+            )
+            .await;
+        let error = match resolution {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(error),
+            Err(error) => Some(error.into()),
+        };
+        if let Some(error) = error {
+            shutdown_startup_session(Some(app_server_session), &mut terminal_restore_guard).await;
+            return Err(error);
+        }
+    }
     let mut app_server = Some(app_server_session);
     // Folder consent runs after the picker resolves the actual destination.
     let should_show_trust_screen_flag = false;
@@ -1349,9 +1396,16 @@ async fn run_ratatui_app(
         }
     };
     // Workload identity bypasses interactive login; every other provider uses account/read.
-    let requires_openai_auth = startup_account
+    let requires_openai_auth = app_server
         .as_ref()
-        .is_some_and(|account| account.requires_openai_auth);
+        .and_then(|server| server.pending_model_context.as_ref())
+        .map(|context| context.requires_openai_auth)
+        .unwrap_or_else(|| {
+            !defer_model_login
+                && startup_account
+                    .as_ref()
+                    .is_some_and(|account| account.requires_openai_auth)
+        });
     let should_show_onboarding = should_show_onboarding(
         login_status,
         requires_openai_auth,
@@ -1883,6 +1937,22 @@ async fn run_ratatui_app(
         },
     };
 
+    app_server.launch_model_choices = app_server_session::StartupLaunchChoices::from_launch(
+        &cli_kv_overrides,
+        &overrides,
+        &loader_overrides,
+    );
+    app_server.bootstrap_model_target = match &session_selection {
+        resume_picker::SessionSelection::Resume(target) => (
+            codex_app_server_protocol::ModelContextIntent::Resume,
+            Some(target.thread_id),
+        ),
+        resume_picker::SessionSelection::Fork(target) => (
+            codex_app_server_protocol::ModelContextIntent::Fork,
+            Some(target.thread_id),
+        ),
+        _ => (codex_app_server_protocol::ModelContextIntent::Start, None),
+    };
     if let resume_picker::SessionSelection::Resume(target)
     | resume_picker::SessionSelection::Fork(target) = &session_selection
     {

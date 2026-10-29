@@ -15,6 +15,7 @@ use codex_login::WorkspaceRoutingRequest;
 use codex_login::default_client::ClientRedirectPolicy;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::cache::ModelsCache;
+use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
@@ -91,6 +92,17 @@ pub type ProviderAccountResult = std::result::Result<ProviderAccountState, Provi
 pub const DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL: &str = "codex-auto-review";
 
 const API_KEY_APPROVAL_REVIEW_PREFERRED_MODEL: &str = "gpt-5.6-luna";
+
+/// Custom providers review with the action-time parent model. A bundled catalog or
+/// an OpenAI login does not authorize using OpenAI's specialized reviewer models.
+pub fn approval_review_uses_parent_model(provider_id: &str) -> bool {
+    !matches!(
+        provider_id,
+        codex_model_provider_info::OPENAI_PROVIDER_ID
+            | codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID
+            | codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID
+    )
+}
 
 /// Default model used for memory extraction when a provider does not require a
 /// backend-specific model ID.
@@ -311,6 +323,15 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         Arc::new(StaticModelsManager::new(self.auth_manager(), model_catalog))
     }
 
+    /// Creates an isolated manager with a bounded, provider/auth-scoped memory cache.
+    /// Static catalogs stay authoritative; this never writes the default disk cache.
+    fn models_manager_for_context(
+        &self,
+        config_model_catalog: Option<ModelsResponse>,
+    ) -> SharedModelsManager {
+        self.models_manager_without_cache(config_model_catalog)
+    }
+
     /// Creates a model manager that can use a caller-provided cache for remote catalogs.
     ///
     /// Providers with remote catalogs should override this method. The default preserves the
@@ -377,6 +398,7 @@ struct ConfiguredModelProvider {
 enum ModelsCacheConfig {
     Disk { codex_home: PathBuf },
     Disabled,
+    Context,
     Custom(Arc<dyn ModelsCache>),
 }
 
@@ -417,6 +439,14 @@ impl ConfiguredModelProvider {
             ModelsCacheConfig::Disabled => {
                 OpenAiModelsManager::new_without_cache(endpoint, auth_manager)
             }
+            ModelsCacheConfig::Context => match endpoint.identity() {
+                Some(identity) => OpenAiModelsManager::new_with_cache(
+                    crate::shared_state::process_shared_state().context_models_cache(identity),
+                    endpoint,
+                    auth_manager,
+                ),
+                None => OpenAiModelsManager::new_without_cache(endpoint, auth_manager),
+            },
             ModelsCacheConfig::Custom(cache) => {
                 OpenAiModelsManager::new_with_cache(cache, endpoint, auth_manager)
             }
@@ -571,6 +601,13 @@ impl ModelProvider for ConfiguredModelProvider {
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
         self.create_models_manager(config_model_catalog, ModelsCacheConfig::Disabled)
+    }
+
+    fn models_manager_for_context(
+        &self,
+        config_model_catalog: Option<ModelsResponse>,
+    ) -> SharedModelsManager {
+        self.create_models_manager(config_model_catalog, ModelsCacheConfig::Context)
     }
 
     fn models_manager_with_cache(

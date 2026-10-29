@@ -1,3 +1,53 @@
+# Mixed Provider App Server
+
+Compatible clients can share one app-server while selecting an independent provider,
+model, and catalog for each thread. The TUI negotiates
+`initialize.result.serverCapabilities.mixedProviderAppServer == 1` before using
+this path. For example:
+
+```sh
+codex \
+  -c 'model_provider="kimi"' \
+  -c 'model_catalog_json="~/.codex/models_kimi.json"' \
+  -m k3.1-pro
+```
+
+Configure `kimi` in the server's configuration and make its credentials available
+to the daemon's environment or host-owned credential store. A client's shell
+variables are not forwarded. These choices do not restart the daemon or change
+another thread's model context.
+
+The API flow is `modelContext/resolve`, then `model/list` with its
+`modelContextId`, then `thread/start` with that handle. A top-level `model` can
+select another model in the same context; provider and catalog replacements must
+be resolved first. After attachment, use `threadId` for scoped model listing and
+`modelProvider/capabilities/read`. Cold metadata discovery uses a resume-intent
+resolution; direct thread selectors require a loaded thread.
+
+Catalog-path inputs are admitted only over stdio, the verified local control
+socket, or in-process connections. TCP WebSocket and remote-control clients can
+use host-configured catalog sources and authorized thread contexts. A native
+`model_catalog_url` must serve the supported Codex model-metadata schema.
+
+Static catalogs are read once during resolution. Durable threads retain verified
+catalog objects under `CODEX_HOME/model-contexts/`, so resume does not depend on
+the original JSON file. Pending handles expire after ten minutes, are bound to
+their connection and authentication owner, and are consumed by the first validated
+attachment attempt. Resolve again after a failed or cancelled attempt.
+Model changes remain within the retained provider/catalog; replacing a loaded
+thread's context is rejected. Catalog objects are retained conservatively and
+are not automatically garbage-collected.
+
+Model-context threads require compatible server binaries sharing their Codex
+home. The store records a reader requirement that managed launches pass as a
+required startup argument; manually running an unaware older binary against that
+store is unsupported. Older servers report a compatibility error for explicit
+mixed-provider launch choices. Use an updated CLI and daemon for shared operation.
+
+See the [design](../../docs/nzsn/mixed-provider-app-server-design.md) and
+[validation record](../../docs/nzsn/mixed-provider-app-server-validation.md) for
+scope, limits, and qualification boundaries.
+
 # Thread list exclusions
 
 `thread/list` accepts `excludedThreadIds`, an optional array of up to 100

@@ -474,6 +474,8 @@ pub(super) async fn run_main_inner(
     let additional_dirs = cli.add_dir.clone();
 
     let mut overrides = ConfigOverrides {
+        defer_model_catalog: daemon_exclusion.is_none()
+            || app_server_target.uses_remote_workspace(),
         model,
         approval_policy,
         sandbox_mode,

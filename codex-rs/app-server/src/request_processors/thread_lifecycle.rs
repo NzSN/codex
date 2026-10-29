@@ -913,6 +913,12 @@ pub(super) async fn handle_pending_thread_resume_request(
     thread.session_id = session_id;
 
     let response = ThreadResumeResponse {
+        model_context: conversation
+            .config()
+            .await
+            .resolved_model_context
+            .as_ref()
+            .map(|context| codex_app_server_protocol::ModelContextInfo::from(&context.snapshot)),
         thread,
         disabled_plugin_ids,
         model,

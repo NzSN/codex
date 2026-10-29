@@ -80,8 +80,8 @@ async fn computer_use_scoring_follows_model_review_requirement(
         start_mcp_server_with_tools(&["js"], /*sensitive_action*/ None).await?;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&responses_url)
+        .with_builtin_openai_provider()
         .with_model(MODEL)
-        .with_provider_config("supports_websockets = false")
         .with_approval_policy("on-request")
         .with_root_config("approvals_reviewer = \"auto_review\"")
         .with_extra_config(&format!(
@@ -183,7 +183,9 @@ async fn guardian_programs_follow_each_turn_without_changing_parent_selection(
                         .and_then(|value| value.to_str().ok())
                         == Some("classifier")
                     {
-                        luna_websocket(state, websocket).await.into_response()
+                        luna_websocket(state, headers, websocket)
+                            .await
+                            .into_response()
                     } else {
                         StatusCode::UPGRADE_REQUIRED.into_response()
                     }

@@ -51,6 +51,31 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                 return;
             }
 
+            // Skill evidence also belongs to delegated reviewers. Keep this setup
+            // independent of whether this thread may run the built-in classifier.
+            input
+                .thread_store
+                .get_or_init(GuardianReviewEvidence::default);
+            input
+                .thread_store
+                .insert(TrustedSkillRoots::from_config(input.config));
+
+            // Luna and Decisions are specialized backends. Custom-provider tasks
+            // use their own model through the synchronous reviewer instead.
+            if codex_model_provider::approval_review_uses_parent_model(
+                &input.config.model_provider_id,
+            ) {
+                input.thread_store.remove::<ConversationBackend>();
+                input.thread_store.remove::<LunaSampler>();
+                input
+                    .thread_store
+                    .remove::<super::decisions::DecisionsSampler>();
+                input.thread_store.remove::<GuardianV2Enabled>();
+                input.thread_store.remove::<GuardianV2ScoreProgress>();
+                input.thread_store.remove::<GuardianV2Config>();
+                return;
+            }
+
             let model = input.thread_store.get::<ModelInfo>();
             let thread_id = input.thread_store.level_id().to_string();
             let guardian_config = match GuardianV2Config::resolve(input.config) {
@@ -118,13 +143,6 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
             input.thread_store.insert(GuardianV2ScoreProgress::new(
                 input.extension_metrics.clone(),
             ));
-            // Preserve the answer path selected by the host for this thread.
-            input
-                .thread_store
-                .get_or_init(GuardianReviewEvidence::default);
-            input
-                .thread_store
-                .insert(TrustedSkillRoots::from_config(input.config));
             if scoring_enabled {
                 input.thread_store.insert(GuardianV2Enabled);
             }

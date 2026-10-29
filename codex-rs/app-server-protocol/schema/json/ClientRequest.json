@@ -2373,6 +2373,58 @@
       ],
       "type": "string"
     },
+    "ModelContextIntent": {
+      "description": "Operation whose model defaults are being resolved.",
+      "enum": [
+        "start",
+        "resume",
+        "fork"
+      ],
+      "type": "string"
+    },
+    "ModelContextResolveParams": {
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "intent": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelContextIntent"
+            }
+          ],
+          "default": "start"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modelCatalogJson": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modelProvider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ModelListParams": {
       "properties": {
         "cursor": {
@@ -2397,11 +2449,37 @@
             "integer",
             "null"
           ]
+        },
+        "modelContextId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
     },
     "ModelProviderCapabilitiesReadParams": {
+      "properties": {
+        "modelContextId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "MultiAgentMode": {
@@ -4592,6 +4670,12 @@
             "null"
           ]
         },
+        "modelContextId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "modelProvider": {
           "type": [
             "string",
@@ -5312,6 +5396,12 @@
             "null"
           ]
         },
+        "modelContextId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "modelProvider": {
           "type": [
             "string",
@@ -5634,6 +5724,12 @@
           ]
         },
         "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modelContextId": {
           "type": [
             "string",
             "null"
@@ -7997,6 +8093,30 @@
         "method"
       ],
       "title": "Account/gatewayOAuth/cancelRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "modelContext/resolve"
+          ],
+          "title": "ModelContext/resolveRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ModelContextResolveParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ModelContext/resolveRequest",
       "type": "object"
     },
     {

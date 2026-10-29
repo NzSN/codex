@@ -373,6 +373,14 @@ impl App {
                 Err(err) => return shutdown_on_startup_error(app_server, err).await,
             },
         };
+        if let Some(context) = &app_server.pending_model_context {
+            launch_choices.model_context_id = Some(context.model_context_id.clone());
+            config.model = Some(context.model.clone());
+            config.model_provider_id = context.model_provider.clone();
+            if let Some(provider) = config.model_providers.get(&context.model_provider).cloned() {
+                config.model_provider = provider;
+            }
+        }
         tracing::debug!(
             has_platform_family = app_server.app_server_platform_family().is_some(),
             has_platform_os = app_server.app_server_platform_os().is_some(),

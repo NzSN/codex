@@ -9,11 +9,18 @@ use pretty_assertions::assert_eq;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
 
+fn openai_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
+    let mut session = test_thread_session(thread_id, cwd);
+    session.model_provider_id = "openai".into();
+    session.requires_openai_auth = Some(true);
+    session
+}
+
 async fn app_with_pending_thread_usage()
 -> Result<(Box<App>, AppServerSession, tui::Tui, ThreadId, u64)> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let thread_id = ThreadId::new();
-    app.chat_widget.handle_thread_session(test_thread_session(
+    app.chat_widget.handle_thread_session(openai_thread_session(
         thread_id,
         test_path_buf("/tmp/project"),
     ));
@@ -82,7 +89,7 @@ fn pending_history_text(tui: &tui::Tui) -> String {
 async fn account_updated_with_backend_only_auth_enables_thread_usage() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let thread_id = ThreadId::new();
-    app.chat_widget.handle_thread_session(test_thread_session(
+    app.chat_widget.handle_thread_session(openai_thread_session(
         thread_id,
         test_path_buf("/tmp/project"),
     ));

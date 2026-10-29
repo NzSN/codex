@@ -34,7 +34,7 @@ const ALLOW: &str = r#"{"outcome":"allow","rationale":"completed seed assessment
 
 fn sync_config(responses_url: &str) -> MockResponsesConfig {
     MockResponsesConfig::new(responses_url)
-        .with_provider_config("supports_websockets = false")
+        .with_builtin_openai_provider()
         .with_approval_policy("on-request")
         .with_root_config("approvals_reviewer = \"auto_review\"\nthread_unload_delay_secs = 0")
         .with_extra_config("[features.guardianv2]\nenabled = false")
@@ -447,7 +447,7 @@ async fn managed_reviewers_reuse_fork_and_resume_after_parent_shutdown(
     assert_eq!(closed.thread_id, parent.id);
     let state_db = StateRuntime::init(
         codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
-        "mock_provider".into(),
+        "openai".into(),
     )
     .await?;
     let metadata = state_db

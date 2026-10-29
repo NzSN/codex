@@ -4459,6 +4459,7 @@ async fn session_configured_clears_goal_status_footer() {
         thread_name: None,
         model: "gpt-5.4".to_string(),
         model_provider_id: "test-provider".to_string(),
+        requires_openai_auth: None,
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,

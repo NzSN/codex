@@ -18,7 +18,7 @@ async fn user_goal_updates_survive_resume_and_clear(unloaded: bool) -> Result<()
     .await;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri())
-        .with_provider_config("supports_websockets = false")
+        .with_builtin_openai_provider()
         .enable_feature(Feature::Goals)
         .disable_feature(Feature::EnableRequestCompression)
         .write(codex_home.path())?;
@@ -33,7 +33,7 @@ async fn user_goal_updates_survive_resume_and_clear(unloaded: bool) -> Result<()
             "2025-01-05T12-00-00",
             "2025-01-05T12:00:00Z",
             "",
-            Some("mock_provider"),
+            Some("openai"),
             /*git_info*/ None,
         )?
     } else {

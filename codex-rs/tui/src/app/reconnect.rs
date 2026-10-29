@@ -70,6 +70,12 @@ pub(super) async fn reconnect(
                 .with_local_codex_home(&config.codex_home)
                 .with_remote_cwd_override(remote_cwd.clone())
                 .with_thread_tool_transport(task_tools.clone());
+            if let Some(id) = thread_id {
+                session.bootstrap_model_target = (
+                    codex_app_server_protocol::ModelContextIntent::Resume,
+                    Some(id),
+                );
+            }
             let bootstrap = session.bootstrap(&config).await?;
             let thread = if let Some(thread_id) = thread_id {
                 match session

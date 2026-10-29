@@ -58,8 +58,8 @@ async fn model_guardian_policy_controls_cua(
     .await?;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&responses_url)
+        .with_builtin_openai_provider()
         .with_model(MODEL)
-        .with_provider_config("supports_websockets = false")
         .with_approval_policy("on-request")
         .with_root_config("approvals_reviewer = \"auto_review\"")
         .with_extra_config(&format!(

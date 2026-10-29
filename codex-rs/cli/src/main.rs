@@ -575,6 +575,9 @@ struct LogoutCommand {
 
 #[derive(Debug, Parser)]
 struct AppServerCommand {
+    /// Required durable model-context reader contract supplied by managed launchers.
+    #[arg(long, hide = true)]
+    required_model_context_version: Option<u32>,
     #[command(flatten)]
     startup_config: codex_app_server::StartupConfigArgs,
 
@@ -1249,6 +1252,7 @@ async fn cli_main(
         }
         Some(Subcommand::AppServer(app_server_cli)) => {
             let AppServerCommand {
+                required_model_context_version,
                 startup_config,
                 cloud_skills_snapshot,
                 subcommand,
@@ -1261,6 +1265,10 @@ async fn cli_main(
                 analytics_default_enabled,
                 auth,
             } = app_server_cli;
+            anyhow::ensure!(
+                required_model_context_version.is_none_or(|version| version == 1),
+                "unsupported required model-context reader version"
+            );
             let strict_config = app_server_strict_config || root_strict_config;
             reject_strict_config_for_app_server_subcommand(strict_config, subcommand.as_ref())?;
             reject_remote_mode_for_app_server_subcommand(

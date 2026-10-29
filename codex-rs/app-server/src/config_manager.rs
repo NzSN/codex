@@ -44,6 +44,7 @@ pub(crate) struct ModelProviderRequirementsChanged;
 /// Shared app-server entry point for loading effective Codex configuration.
 #[derive(Clone)]
 pub(crate) struct ConfigManager {
+    pub(crate) model_contexts: Arc<crate::model_context::ModelContextRegistry>,
     codex_home: PathBuf,
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
     runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
@@ -103,6 +104,7 @@ impl ConfigManager {
     ) -> Self {
         let network_policy = codex_http_client::NetworkPolicyController::default();
         Self {
+            model_contexts: Arc::default(),
             codex_home,
             cli_overrides: Arc::new(RwLock::new(cli_overrides)),
             runtime_feature_enablement: Arc::new(RwLock::new(BTreeMap::new())),
@@ -276,7 +278,7 @@ impl ConfigManager {
             .await?;
         self.check_application_policy_load(&policy_load)?;
         self.apply_network_policy(&mut config);
-        self.apply_runtime_feature_enablement(&mut config);
+        self.apply_runtime_feature_enablement(&mut config)?;
         self.apply_arg0_paths(&mut config);
         config.config_layer_stack = config
             .config_layer_stack
@@ -302,7 +304,7 @@ impl ConfigManager {
         )
         .await?;
         self.apply_network_policy(&mut config);
-        self.apply_runtime_feature_enablement(&mut config);
+        self.apply_runtime_feature_enablement(&mut config)?;
         self.apply_arg0_paths(&mut config);
         config.config_layer_stack = config
             .config_layer_stack
@@ -331,7 +333,7 @@ impl ConfigManager {
         )
         .await?;
         self.apply_network_policy(&mut config);
-        self.apply_runtime_feature_enablement(&mut config);
+        self.apply_runtime_feature_enablement(&mut config)?;
         self.apply_arg0_paths(&mut config);
         config.config_layer_stack = config
             .config_layer_stack
@@ -388,6 +390,17 @@ impl ConfigManager {
         let definition_changed = required_provider
             .as_ref()
             .is_some_and(|provider| provider != &current.model_provider);
+        if current.resolved_model_context.is_some()
+            && let Some(path) = &requirements.model_catalog_json
+        {
+            let required = codex_core::model_context::load_catalog(path.as_path())?;
+            if current.model_catalog.as_ref() != Some(&required) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "retained model catalog no longer satisfies managed requirements",
+                ));
+            }
+        }
         if selection_changed || definition_changed {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
@@ -460,7 +473,7 @@ impl ConfigManager {
             .build()
             .await?;
         self.apply_network_policy(&mut config);
-        self.apply_runtime_feature_enablement(&mut config);
+        self.apply_runtime_feature_enablement(&mut config)?;
         self.apply_arg0_paths(&mut config);
         config.config_layer_stack = config
             .config_layer_stack
@@ -585,7 +598,7 @@ impl ConfigManager {
         let mut config = result?;
         self.check_application_policy_load(&policy_load)?;
         self.apply_network_policy(&mut config);
-        self.apply_runtime_feature_enablement(&mut config);
+        self.apply_runtime_feature_enablement(&mut config)?;
         self.apply_arg0_paths(&mut config);
         config.config_layer_stack = config
             .config_layer_stack
@@ -623,8 +636,17 @@ impl ConfigManager {
         Ok(layers)
     }
 
-    fn apply_runtime_feature_enablement(&self, config: &mut Config) {
+    fn apply_runtime_feature_enablement(&self, config: &mut Config) -> std::io::Result<()> {
         apply_runtime_feature_enablement(config, &self.current_runtime_feature_enablement());
+        if let Some(context) = &config.resolved_model_context
+            && !context.matches_config(config)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "model context configuration changed; resolve it again",
+            ));
+        }
+        Ok(())
     }
 
     fn current_runtime_feature_enablement(&self) -> BTreeMap<String, bool> {

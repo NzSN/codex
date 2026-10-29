@@ -1,3 +1,6 @@
+#[path = "catalog_model_context.rs"]
+mod catalog_model_context;
+
 use super::*;
 use crate::model_catalog::ModelCatalog;
 use codex_config::ConfigPathContext;
@@ -176,13 +179,36 @@ impl CatalogRequestProcessor {
 
     pub(crate) async fn model_list(
         &self,
+        connection_id: ConnectionId,
         params: ModelListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let (config, models_manager) = self
-            .model_catalog
-            .current()
-            .await
-            .map_err(|err| config_load_error(&err))?;
+        let (config, models_manager) = match self
+            .scoped_model_config(
+                connection_id,
+                params.model_context_id.as_deref(),
+                params.thread_id.as_deref(),
+            )
+            .await?
+        {
+            Some(config) => {
+                let manager = config
+                    .resolved_model_context
+                    .as_ref()
+                    .map(|context| context.models_manager.clone())
+                    .unwrap_or_else(|| {
+                        codex_core::build_models_manager(
+                            &config,
+                            self.thread_manager.auth_manager(),
+                        )
+                    });
+                (config, manager)
+            }
+            None => self
+                .model_catalog
+                .current()
+                .await
+                .map_err(|error| config_load_error(&error))?,
+        };
         // Gate the same provider used by the catalog, including when its model cache is warm.
         // Resolving credentials may refresh them, but explicit host policy prevents browser login.
         if let Some(gateway) = codex_model_provider::create_model_provider(
@@ -288,10 +314,34 @@ impl CatalogRequestProcessor {
         config: Arc<Config>,
         models_manager: codex_models_manager::manager::SharedModelsManager,
     ) -> Result<ModelListResponse, JSONRPCErrorError> {
+        let scope_identity = if params.model_context_id.is_some() || params.thread_id.is_some() {
+            Some((
+                codex_core::model_context::route_fingerprint(
+                    &config.model_provider_id,
+                    &config.model_provider,
+                )
+                .map_err(|error| config_load_error(&error))?,
+                *self
+                    .thread_manager
+                    .auth_manager()
+                    .auth_change_receiver()
+                    .borrow(),
+                params.model_context_id.clone(),
+                params.thread_id.clone(),
+                config
+                    .resolved_model_context
+                    .as_ref()
+                    .and_then(|context| context.snapshot.catalog_digest.clone()),
+            ))
+        } else {
+            None
+        };
         let ModelListParams {
             limit,
             cursor,
             include_hidden,
+            model_context_id: _,
+            thread_id: _,
         } = params;
         let presets = self
             .model_catalog
@@ -303,6 +353,15 @@ impl CatalogRequestProcessor {
             .await
             .map_err(|err| config_load_error(&err))?;
         let models = supported_models(presets, include_hidden.unwrap_or(false));
+        let cursor_scope = scope_identity.map(|identity| {
+            use sha2::Digest;
+            format!(
+                "{:x}",
+                sha2::Sha256::digest(
+                    serde_json::to_vec(&(identity, include_hidden, &models)).unwrap_or_default()
+                )
+            )
+        });
         let total = models.len();
 
         if total == 0 {
@@ -315,9 +374,17 @@ impl CatalogRequestProcessor {
         let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
         let effective_limit = effective_limit.min(total);
         let start = match cursor {
-            Some(cursor) => cursor
-                .parse::<usize>()
-                .map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))?,
+            Some(cursor) => match &cursor_scope {
+                Some(scope) => cursor
+                    .strip_prefix(&format!("{scope}:"))
+                    .ok_or_else(|| {
+                        invalid_request("model cursor does not match this context or catalog")
+                    })?
+                    .to_string(),
+                None => cursor.clone(),
+            }
+            .parse::<usize>()
+            .map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))?,
             None => 0,
         };
 
@@ -330,7 +397,7 @@ impl CatalogRequestProcessor {
         let end = start.saturating_add(effective_limit).min(total);
         let items = models[start..end].to_vec();
         let next_cursor = if end < total {
-            Some(end.to_string())
+            Some(cursor_scope.map_or_else(|| end.to_string(), |scope| format!("{scope}:{end}")))
         } else {
             None
         };

@@ -13,6 +13,53 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 #[tokio::test]
+async fn context_binding_checks_discovery_after_runtime_feature_defaults() -> anyhow::Result<()> {
+    let home = tempfile::tempdir()?;
+    let manager = ConfigManager::without_managed_config_for_tests(home.path().to_path_buf());
+    manager
+        .extend_runtime_feature_enablement([("api_key_model_discovery".into(), false)])
+        .expect("runtime defaults");
+    let initial = manager
+        .load_latest_config(Some(home.path().to_path_buf()))
+        .await?;
+    assert!(
+        !initial
+            .features
+            .enabled(codex_features::Feature::ApiKeyModelDiscovery)
+    );
+    let auth =
+        codex_login::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("fixture-key"));
+    let context = codex_core::model_context::ResolvedModelContext::resolve(&initial, auth, None)?;
+    let overrides = ConfigOverrides {
+        model_context: Some(context.clone()),
+        ..Default::default()
+    };
+    let compatible = manager.load_with_overrides(None, overrides.clone()).await?;
+    assert!(
+        context.matches_config(&compatible),
+        "runtime defaults must be applied before checking compatibility"
+    );
+    manager
+        .extend_runtime_feature_enablement([("api_key_model_discovery".into(), true)])
+        .expect("runtime opt-out");
+    let error = manager
+        .load_with_overrides(None, overrides)
+        .await
+        .expect_err("changed discovery strategy cannot reuse the manager");
+    assert!(
+        error
+            .to_string()
+            .contains("model context configuration changed"),
+        "{error}"
+    );
+    assert!(
+        context.discovery_setting_matches(false),
+        "binding must not mutate a shared manager"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn reloads_accept_a_provider_supplied_by_thread_overrides() -> anyhow::Result<()> {
     let home = tempfile::tempdir()?;
     let manager = ConfigManager::without_managed_config_for_tests(home.path().to_path_buf());

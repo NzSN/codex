@@ -120,8 +120,8 @@ with urllib.request.urlopen(request, timeout=30) as response:
     let analytics_server = responses::start_mock_server().await;
     mount_analytics_capture(&analytics_server, codex_home.path()).await?;
     MockResponsesConfig::new(&responses_url)
+        .with_builtin_openai_provider()
         .with_model(MODEL)
-        .with_provider_config("supports_websockets = false")
         .with_approval_policy("on-request")
         .with_root_config(&format!("approvals_reviewer = \"auto_review\"\nchatgpt_base_url = \"{}\"", analytics_server.uri()))
         .with_extra_config(&format!(

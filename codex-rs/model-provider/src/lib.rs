@@ -3,6 +3,7 @@ mod auth;
 mod bearer_auth_provider;
 mod capabilities;
 mod combined_auth;
+mod models_cache;
 mod models_endpoint;
 mod models_identity;
 mod provider;
@@ -39,6 +40,7 @@ pub use provider::ProviderAccountState;
 pub use provider::ProviderAuthRecoveryMessages;
 pub use provider::ProviderUnauthorizedRecovery;
 pub use provider::SharedModelProvider;
+pub use provider::approval_review_uses_parent_model;
 pub use provider::create_model_provider;
 
 #[cfg(test)]

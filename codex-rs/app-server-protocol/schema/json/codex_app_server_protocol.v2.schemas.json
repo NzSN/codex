@@ -3522,6 +3522,30 @@
             },
             "method": {
               "enum": [
+                "modelContext/resolve"
+              ],
+              "title": "ModelContext/resolveRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ModelContextResolveParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ModelContext/resolveRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "modelProvider/capabilities/read"
               ],
               "title": "ModelProvider/capabilities/readRequestMethod",
@@ -11874,6 +11898,144 @@
       ],
       "type": "object"
     },
+    "ModelContextCapabilities": {
+      "properties": {
+        "imageGeneration": {
+          "type": "boolean"
+        },
+        "webSearch": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "imageGeneration",
+        "webSearch"
+      ],
+      "type": "object"
+    },
+    "ModelContextInfo": {
+      "properties": {
+        "catalogDigest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "catalogSource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modelProvider": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "modelProvider",
+        "version"
+      ],
+      "type": "object"
+    },
+    "ModelContextIntent": {
+      "description": "Operation whose model defaults are being resolved.",
+      "enum": [
+        "start",
+        "resume",
+        "fork"
+      ],
+      "type": "string"
+    },
+    "ModelContextResolveParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "intent": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelContextIntent"
+            }
+          ],
+          "default": "start"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modelCatalogJson": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modelProvider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "ModelContextResolveParams",
+      "type": "object"
+    },
+    "ModelContextResolveResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "capabilities": {
+          "$ref": "#/definitions/ModelContextCapabilities"
+        },
+        "context": {
+          "$ref": "#/definitions/ModelContextInfo"
+        },
+        "model": {
+          "type": "string"
+        },
+        "modelContextId": {
+          "type": "string"
+        },
+        "modelProvider": {
+          "type": "string"
+        },
+        "requiresOpenaiAuth": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "capabilities",
+        "context",
+        "model",
+        "modelContextId",
+        "modelProvider",
+        "requiresOpenaiAuth",
+        "warnings"
+      ],
+      "title": "ModelContextResolveResponse",
+      "type": "object"
+    },
     "ModelListParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -11897,6 +12059,18 @@
           "minimum": 0.0,
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "modelContextId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": [
+            "string",
             "null"
           ]
         }
@@ -11929,6 +12103,20 @@
     },
     "ModelProviderCapabilitiesReadParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "modelContextId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "title": "ModelProviderCapabilitiesReadParams",
       "type": "object"
     },
@@ -19603,6 +19791,12 @@
             "null"
           ]
         },
+        "modelContextId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "modelProvider": {
           "type": [
             "string",
@@ -19681,6 +19875,16 @@
         },
         "model": {
           "type": "string"
+        },
+        "modelContext": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ModelContextInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "modelProvider": {
           "type": "string"
@@ -22153,6 +22357,12 @@
             "null"
           ]
         },
+        "modelContextId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "modelProvider": {
           "type": [
             "string",
@@ -22250,6 +22460,16 @@
         },
         "model": {
           "type": "string"
+        },
+        "modelContext": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ModelContextInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "modelProvider": {
           "type": "string"
@@ -22874,6 +23094,12 @@
             "null"
           ]
         },
+        "modelContextId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "modelProvider": {
           "type": [
             "string",
@@ -22973,6 +23199,16 @@
         },
         "model": {
           "type": "string"
+        },
+        "modelContext": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ModelContextInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "modelProvider": {
           "type": "string"

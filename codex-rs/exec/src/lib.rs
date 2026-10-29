@@ -584,6 +584,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     };
 
     let overrides = ConfigOverrides {
+        defer_model_catalog: false,
+        model_catalog_snapshot: None,
+        model_context: None,
         model,
         review_model: None,
         // Default to never ask for approvals in headless mode. Rebuild below if

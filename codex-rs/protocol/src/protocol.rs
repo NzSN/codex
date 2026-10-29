@@ -2337,6 +2337,10 @@ pub struct ThreadSettingsAppliedEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct ThreadSettingsSnapshot {
+    /// Required model context restored before model selection; absent for legacy threads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model_context: Option<crate::model_context::ModelContextSnapshot>,
     pub model: String,
     pub model_provider_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3229,6 +3233,10 @@ pub enum MultiAgentTaskPayload {
     Plaintext,
 }
 
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde skip_serializing_if predicates receive a reference"
+)]
 fn is_encrypted_multi_agent_task_payload(task_payload: &MultiAgentTaskPayload) -> bool {
     matches!(task_payload, MultiAgentTaskPayload::Encrypted)
 }
