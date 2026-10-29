@@ -57,6 +57,98 @@ async fn resolve(
 }
 
 #[tokio::test]
+async fn gpt_resume_context_does_not_wait_for_model_discovery() -> Result<()> {
+    use app_test_support::ChatGptAuthFixture;
+    use app_test_support::write_chatgpt_auth;
+    use codex_app_server_protocol::ModelContextIntent;
+    use codex_config::types::AuthCredentialsStoreMode;
+    use std::time::Duration;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let endpoint = MockServer::start().await;
+    let home = TempDir::new()?;
+    let catalog = codex_models_manager::bundled_models_response()?;
+    let model = catalog
+        .models
+        .iter()
+        .find(|model| model.visibility == ModelVisibility::List)
+        .expect("bundled picker model")
+        .slug
+        .clone();
+    Mock::given(method("GET"))
+        .and(path("/backend-api/codex/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&catalog))
+        .mount(&endpoint)
+        .await;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            r#"
+model_provider = "gpt-resume-test"
+model = {model:?}
+[features]
+code_mode = false
+code_mode_host = false
+[model_providers.gpt-resume-test]
+name = "OpenAI"
+base_url = "{uri}/backend-api/codex"
+wire_api = "responses"
+requires_openai_auth = true
+"#,
+            uri = endpoint.uri()
+        ),
+    )?;
+    write_chatgpt_auth(
+        home.path(),
+        ChatGptAuthFixture::new("context-refresh-token")
+            .account_id("context-refresh-account")
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let mut server = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .without_managed_config()
+        .with_env_overrides(&[("OPENAI_API_KEY", None), ("CODEX_API_KEY", None)])
+        .build_initialized()
+        .await?;
+    let started = server.start_thread(ThreadStartParams::default()).await?;
+    endpoint.reset().await;
+    let slow_catalog = Mock::given(method("GET"))
+        .and(path("/backend-api/codex/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(&catalog)
+                .set_delay(Duration::from_secs(60)),
+        )
+        .expect(1..)
+        .mount_as_scoped(&endpoint)
+        .await;
+    let context: ModelContextResolveResponse = tokio::time::timeout(
+        Duration::from_secs(2),
+        server.request(|request_id| ClientRequest::ModelContextResolve {
+            request_id,
+            params: ModelContextResolveParams {
+                intent: ModelContextIntent::Resume,
+                thread_id: Some(started.thread.id),
+                ..Default::default()
+            },
+        }),
+    )
+    .await
+    .expect("GPT navigation must not wait for the five-second models deadline")?;
+    assert_eq!(context.model_provider, "gpt-resume-test");
+    assert_eq!(context.model, model);
+    tokio::time::timeout(Duration::from_secs(2), slow_catalog.wait_until_satisfied())
+        .await
+        .expect("optional model discovery still runs in the background");
+    Ok(())
+}
+
+#[tokio::test]
 async fn contexts_keep_routing_and_instructions_independent_after_catalog_deletion() -> Result<()> {
     let first = create_mock_responses_server_repeating_assistant("first provider").await;
     let second = create_mock_responses_server_repeating_assistant("second provider").await;

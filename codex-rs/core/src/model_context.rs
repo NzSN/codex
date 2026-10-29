@@ -325,7 +325,7 @@ impl ResolvedModelContext {
         }
         let provider = create_model_provider(config.model_provider.clone(), Some(auth));
         // Pending/independent contexts must not overwrite the default disk cache.
-        let manager = provider.models_manager_without_cache(snapshot.catalog.clone());
+        let manager = provider.models_manager_for_context(snapshot.catalog.clone());
         let manager: SharedModelsManager = if config.model_provider.requires_openai_auth {
             manager
         } else {

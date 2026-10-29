@@ -253,6 +253,16 @@ Initially construct one manager per resolved context. Share static parsed snapsh
 
 Where remote caches are used, retain and verify the existing endpoint/auth identity checks in [ModelsCache](../../codex-rs/models-manager/src/cache.rs). Partition storage to avoid different active providers repeatedly overwriting one shared cache file. Include effective provider route, catalog source/version, tenant/auth scope, client version, and relevant discovery settings in lookup identity. Model slug and provider display name alone are insufficient.
 
+Restored contexts retain independent models managers and share a process-local catalog cache
+using the existing provider/auth identity digest. The registry retains at most 32 scopes;
+entries expire after five minutes and require a matching client version. Static catalogs
+remain authoritative, discovery opt-outs still gate cache use, and these contexts never
+write the default disk cache. Account changes cannot publish into a previous identity's
+cache. Resuming a built-in OpenAI session with ChatGPT authentication uses cached or bundled
+metadata immediately and refreshes optional remote metadata in the background. Initial
+selection and explicit provider-native catalogs keep synchronous discovery and membership
+validation.
+
 Do not put raw credentials into cache keys or logs. Invalidate auth-sensitive discovery state on account transitions and recheck current visibility. Static metadata can remain a snapshot while current authorization is reevaluated. Provider configuration changes create a new context; they do not mutate an existing thread's route.
 
 Provider discovery must not hold the registry's global lock across network I/O. Resolve independently, then atomically publish a validated context. Failed or cancelled resolution publishes no handle or thread. Duplicate concurrent requests may share bounded in-flight discovery only when their full scope identity agrees.

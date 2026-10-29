@@ -251,10 +251,26 @@ impl ThreadRequestProcessor {
             .await
             .map_err(|error| config_load_error(&error))?;
         let manager = context.models_manager.clone();
+        // Built-in OpenAI metadata has a bundled fallback. A navigation request must not
+        // wait for its optional network refresh; explicit provider catalogs still need
+        // synchronous discovery to enforce their authoritative model membership.
+        let background_refresh = params.intent == ModelContextIntent::Resume
+            && self.auth_manager.current_auth_uses_codex_backend()
+            && config.model_provider.is_openai()
+            && config.model_provider.requires_openai_auth
+            && config.model_provider.model_catalog_url.is_none()
+            && config.model_provider.env_key.is_none()
+            && config.model_provider.experimental_bearer_token.is_none()
+            && !config.model_provider.has_command_auth();
+        let http_client_factory = config.http_client_factory();
         let models = manager
             .list_models(
-                RefreshStrategy::OnlineIfUncached,
-                config.http_client_factory(),
+                if background_refresh {
+                    RefreshStrategy::Offline
+                } else {
+                    RefreshStrategy::OnlineIfUncached
+                },
+                http_client_factory.clone(),
             )
             .await;
         if models.is_empty() {
@@ -367,6 +383,13 @@ impl ThreadRequestProcessor {
                 revision,
             )
             .await?;
+        if background_refresh {
+            tokio::spawn(async move {
+                manager
+                    .list_models(RefreshStrategy::OnlineIfUncached, http_client_factory)
+                    .await;
+            });
+        }
         Ok(ModelContextResolveResponse {
             requires_openai_auth,
             model_context_id,

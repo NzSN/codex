@@ -234,3 +234,82 @@ These **37 distinct selected tests passed**. The three new regressions cover pro
 The broader `status_` selection passed 388 tests and failed 22 with local mock listeners allowed. The pre-existing test binary `codex_tui-aa5d2a8ba79c4123` passed 385 tests and failed the exact same 22 named tests; the current selection adds the three new passing regressions. Those failures concern version/shortcut snapshots and an existing Daybreak assertion. This comparison uses an existing binary, not a fresh baseline build of HEAD. The original sandboxed selection passed 387 and failed 23; mock-listener denial prevented one additional test from passing. The remote workspace-root fixture also required a rerun with local listeners allowed, after which both lifecycle tests passed.
 
 Detailed logs are retained under `/tmp/mixed-status-*.log`, including the interrupted builds and broader failures. Generated failing snapshots were moved to `/tmp/mixed-status-snapshot-failures/` without accepting them. No live provider, installed binary replacement, or fully optimized release qualification was performed.
+
+## GPT session-switch latency correction (2026-10-29)
+
+Runtime logs showed `modelContext/resolve` awaiting optional GPT catalog discovery for
+about five seconds before starting `thread/resume`. For example, resolution started at
+02:07:43.229 UTC, the catalog request timed out at 02:07:48.296, and resume started at
+02:07:48.330. Independent/restored contexts previously disabled all catalog caching.
+
+ChatGPT-authenticated OpenAI resume now uses cached or bundled metadata and schedules
+optional discovery in the background after publishing the validated pending context.
+Initial selection, API-key discovery, command authentication, and authoritative explicit
+provider catalogs retain their synchronous discovery rules. Context managers remain
+independent while sharing a bounded process-local cache by the existing provider/auth
+identity digest. The registry retains 32 scopes, entries expire after five minutes,
+client versions must match, and a changed account cannot write into its previous cache.
+Static snapshots and API-key discovery opt-outs remain authoritative.
+
+Selected local qualification with Rust 1.99.1 and local mock listeners allowed:
+
+| Check | Result |
+| --- | --- |
+| `codex-model-provider --lib` with the unrelated Bedrock fixture below excluded | 110 passed, including four new cache regressions for reuse/isolation, expiry/version/identity checks, conditional revalidation, and bounded retention. |
+| `codex-app-server --test all suite::v2::mixed_provider_app_server` | 8 passed, including the new stalled-catalog resume regression and existing native-catalog, owner-isolation, and cold-resume cases. |
+| `codex-core --lib model_context::tests` | 10 passed, including discovery-setting isolation, managed catalog authority, restored metadata, and provider/tenant fingerprints. |
+| Before-fix comparison | The same stalled-catalog regression fails at its two-second navigation deadline against the previously packaged CLI. The fixed app-server passes while discovery remains pending against a 60-second mock response. |
+| Formatting | Workspace `cargo fmt --all -- --check`, a final targeted rustfmt check, and `git diff --check` passed. Stable rustfmt reports the existing nightly-only import-granularity setting as unsupported. |
+
+The unfiltered provider run also reports the unchanged
+`amazon_bedrock::runtime_catalog::tests::runtime_catalog_disables_web_search_without_overriding_review_models`
+fixture failure: its expected vector contains duplicate GPT-6 Sol V1 entries absent from
+the runtime catalog. That test and the Bedrock implementation were not changed. The
+final provider command explicitly excludes this one test:
+
+```sh
+env -u CODEX_SANDBOX_NETWORK_DISABLED RUST_MIN_STACK=8388608 \
+  cargo test --manifest-path codex-rs/Cargo.toml -p codex-model-provider --lib --offline --locked -- \
+  --skip amazon_bedrock::runtime_catalog::tests::runtime_catalog_disables_web_search_without_overriding_review_models
+env -u CODEX_SANDBOX_NETWORK_DISABLED RUST_MIN_STACK=8388608 \
+  cargo test --manifest-path codex-rs/Cargo.toml -p codex-app-server --test all \
+  suite::v2::mixed_provider_app_server --offline --locked
+env -u CODEX_SANDBOX_NETWORK_DISABLED RUST_MIN_STACK=8388608 \
+  cargo test --manifest-path codex-rs/Cargo.toml -p codex-core --lib \
+  model_context::tests --offline --locked
+```
+
+Timing excerpts and the expected-failure comparison log are under
+`/tmp/codex-agent-switch-diagnosis/`. The comparison uses the pre-fix packaged CLI
+(`bin/codex` SHA-256 `a5a77fd904dbadad647fdac792a4977b53e3800a555ee3c082c1b4d75d21a587`)
+through a CLI-compatible test launcher; it is not a fresh baseline build. These are
+local synthetic checks, not a live-provider or full terminal-navigation benchmark.
+No installed CLI, existing package, or running daemon was replaced.
+
+### Rebuilt release package
+
+The GNU Linux x86-64 CLI was rebuilt with Rust 1.99.1 using the locked, offline
+`release` profile from `ad437485bc09eeedb4e2ad5921a03905c41b4b7e` plus this latency
+fix. The eight changed Rust files match the source hashes retained in the build
+receipt. The existing code-mode host was reused after confirming that its dependency
+graph contains none of the changed crates.
+
+- Package: `codex-rs/target/packages/codex-linux-session-switch-fix.tar.gz`
+  (140,736,993 bytes, manifest version `0.164.0`).
+- Archive SHA-256: `09218447ce57efadcdf12e58610c0c6a9686c61aaa9797712831f7b7c6e26e6f`.
+- CLI SHA-256: `0fda416f7636af75cb0274099bf984268dc2ef481248710ebbeac02e484f0da9`.
+- Reused host SHA-256: `4afe557d6430b2417a4facb7ff626308f7058c00a425b6e80a8e32e16cd39928`.
+- Retained build provenance and verification: the matching `.build.json`,
+  `.source.patch`, `.build.log`, `.package.log`, `.receipt.json`, `.tar.gz.sha256`,
+  and `.smoke/` artifacts under `codex-rs/target/packages/`.
+
+Archive contents, executable modes, input hashes, and dynamic library resolution
+passed verification. The packaged CLI reported `codex-cli 0.164.0`; the packaged
+host executed `text(6 * 7)` and returned `42` before clean shutdown. A local mock
+Responses flow exercised the packaged CLI and host together, running the package's
+own ripgrep successfully under `workspace-write` sandboxing. The same stalled-catalog
+regression also passed against the packaged release CLI within its two-second
+navigation deadline. The archive checksum was independently checked afterward.
+
+These artifacts remain local build outputs. No running daemon or installed CLI was
+replaced, and no live model endpoint was used for release smoke checks.

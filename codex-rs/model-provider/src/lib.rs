@@ -3,6 +3,7 @@ mod auth;
 mod bearer_auth_provider;
 mod capabilities;
 mod combined_auth;
+mod models_cache;
 mod models_endpoint;
 mod models_identity;
 mod provider;
