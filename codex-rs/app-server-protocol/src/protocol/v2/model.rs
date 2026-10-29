@@ -255,6 +255,10 @@ pub struct ModelContextResolveParams {
     pub intent: ModelContextIntent,
     #[ts(optional = nullable)]
     pub thread_id: Option<String>,
+    /// For start intent, use the same serviceName as thread/start so catalog discovery
+    /// and attachment share an originator. Resume and fork inherit their source's originator.
+    #[ts(optional = nullable)]
+    pub service_name: Option<String>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
     #[ts(optional = nullable)]

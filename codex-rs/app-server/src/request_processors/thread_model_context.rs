@@ -8,6 +8,7 @@ use codex_app_server_protocol::ModelContextIntent;
 use codex_app_server_protocol::ModelContextResolveParams;
 use codex_app_server_protocol::ModelContextResolveResponse;
 use codex_core::model_context::ResolvedModelContext;
+use codex_core::resolve_thread_originator;
 use codex_models_manager::manager::RefreshStrategy;
 
 impl ThreadRequestProcessor {
@@ -33,6 +34,11 @@ impl ThreadRequestProcessor {
         if (params.intent == ModelContextIntent::Start) != params.thread_id.is_none() {
             return Err(invalid_params(
                 "resume/fork require threadId; start must omit threadId",
+            ));
+        }
+        if params.intent != ModelContextIntent::Start && params.service_name.is_some() {
+            return Err(invalid_params(
+                "serviceName is only supported for start; resume/fork inherit their originator",
             ));
         }
         let revision = self.model_context_owner_generation();
@@ -240,9 +246,9 @@ impl ThreadRequestProcessor {
             .await
             .map_err(|error| config_load_error(&error))?;
         config.model = selected_model;
-        if let Some(originator) = saved_originator
-            && let Some(context) = &config.resolved_model_context
-        {
+        let originator =
+            resolve_thread_originator(params.service_name.as_deref(), saved_originator, None);
+        if let Some(context) = &config.resolved_model_context {
             config.resolved_model_context = Some(context.for_originator(&originator));
         }
         let context = config.resolved_model_context.as_ref().ok_or_else(|| {
@@ -391,6 +397,7 @@ impl ThreadRequestProcessor {
                 Arc::new(config),
                 params.intent,
                 params.thread_id,
+                originator,
                 revision,
             )
             .await?;
@@ -426,6 +433,7 @@ impl ThreadRequestProcessor {
         provider: Option<&str>,
         config: Option<&HashMap<String, serde_json::Value>>,
         cwd: Option<&str>,
+        service_name: Option<&str>,
     ) -> Result<Option<PendingModelContext>, JSONRPCErrorError> {
         let Some(id) = id else {
             return Ok(None);
@@ -489,6 +497,14 @@ impl ThreadRequestProcessor {
             return Err(context_error(
                 "modelContextConflict",
                 "model context intent or target does not match",
+            ));
+        }
+        if intent == ModelContextIntent::Start
+            && pending.originator != resolve_thread_originator(service_name, None, None)
+        {
+            return Err(context_error(
+                "modelContextConflict",
+                "serviceName changes the resolved catalog originator; resolve a matching context first",
             ));
         }
         if let Some(cwd) = cwd {
@@ -561,8 +577,10 @@ pub(super) async fn validate_loaded_resume_context(
                         .is_none_or(|pending| loaded != pending)
                 });
         let selected_model = model.or(pending.config.model.as_deref());
+        let snapshot = thread.config_snapshot().await;
         if changed
-            || thread.config_snapshot().await.model.as_str() != selected_model.unwrap_or_default()
+            || snapshot.originator != pending.originator
+            || snapshot.model.as_str() != selected_model.unwrap_or_default()
         {
             return Err(context_error(
                 "modelContextConflict",
@@ -615,7 +633,22 @@ pub(super) async fn attach_model_context(
     };
     validate().await?;
     let created = create.await;
-    if let Err(error) = validate().await {
+    // Runtime metadata can await model resolution, so read it before the final owner check.
+    let originator_changed = if let Some(pending) = pending
+        && let Ok(created) = &created
+    {
+        created.thread.config_snapshot().await.originator != pending.originator
+    } else {
+        false
+    };
+    let mut validation = validate().await;
+    if validation.is_ok() && originator_changed {
+        validation = Err(context_error(
+            "modelContextConflict",
+            "thread originator changed after model context resolution; resolve a new context",
+        ));
+    }
+    if let Err(error) = validation {
         if let Ok(created) = created {
             let _ =
                 tokio::time::timeout(Duration::from_secs(10), created.thread.shutdown_and_wait())
@@ -769,6 +802,7 @@ wire_api = "responses"
                     Arc::new(config),
                     ModelContextIntent::Resume,
                     Some(target.to_string()),
+                    resolve_thread_originator(None, None, None),
                     generation,
                 )
                 .await
@@ -789,6 +823,20 @@ wire_api = "responses"
         validate_loaded_resume_context(&threads, &target.to_string(), &pending[0], None)
             .await
             .expect("same retained context");
+        let mut different_originator = pending[0].clone();
+        different_originator.originator = "codex_work_cca".into();
+        let error = validate_loaded_resume_context(
+            &threads,
+            &target.to_string(),
+            &different_originator,
+            None,
+        )
+        .await
+        .expect_err("loaded originator must match even with a static catalog");
+        assert_eq!(
+            error.data.expect("reason")["reason"],
+            "modelContextConflict"
+        );
         let error =
             validate_loaded_resume_context(&threads, &target.to_string(), &pending[1], None)
                 .await
@@ -802,9 +850,11 @@ wire_api = "responses"
     }
 
     #[tokio::test]
-    async fn attachment_rechecks_owner_before_creation_and_removes_a_revoked_runtime()
+    async fn attachment_rechecks_owner_and_originator_and_removes_a_revoked_runtime()
     -> anyhow::Result<()> {
-        for change_before_creation in [true, false] {
+        for (change_before_creation, change_originator) in
+            [(true, false), (false, false), (false, true)]
+        {
             let home = tempfile::tempdir()?;
             std::fs::write(
                 home.path().join("config.toml"),
@@ -841,15 +891,19 @@ wire_api = "responses"
                     Arc::new(config.clone()),
                     ModelContextIntent::Start,
                     None,
+                    resolve_thread_originator(None, None, None),
                     generation,
                 )
                 .await
                 .expect("handle");
-            let pending = config_manager
+            let mut pending = config_manager
                 .model_contexts
                 .take(connection, &id, generation)
                 .await
                 .expect("consume");
+            if change_originator {
+                pending.originator = "codex_work_cca".into();
+            }
             if change_before_creation {
                 auth.logout().await?;
             }
@@ -867,15 +921,24 @@ wire_api = "responses"
                         .start_thread(StartThreadOptions::new(config))
                         .await?;
                     created_id = Some(created.thread_id);
-                    auth.logout()
-                        .await
-                        .expect("change authentication owner during creation");
+                    if !change_originator {
+                        auth.logout()
+                            .await
+                            .expect("change authentication owner during creation");
+                    }
                     Ok(created)
                 }),
             )
             .await;
-            let error = result.err().expect("owner transition rejects attachment");
-            assert_eq!(error.data.expect("reason")["reason"], "modelContextExpired");
+            let error = result.err().expect("changed binding rejects attachment");
+            assert_eq!(
+                error.data.expect("reason")["reason"],
+                if change_originator {
+                    "modelContextConflict"
+                } else {
+                    "modelContextExpired"
+                }
+            );
             if let Some(id) = created_id {
                 assert!(
                     threads.get_thread(id).await.is_err(),

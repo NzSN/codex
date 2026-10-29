@@ -106,6 +106,18 @@ pub fn approval_review_uses_parent_model(provider_id: &str) -> bool {
     )
 }
 
+/// Whether Guardian may use its specialized async classifiers and their cached scores.
+/// This is independent of synchronous reviewer selection: GCP has a dedicated
+/// reviewer, but does not support the classifier model and Responses Lite backend.
+pub fn supports_guardian_async_classifier(provider_id: &str) -> bool {
+    matches!(
+        provider_id,
+        codex_model_provider_info::OPENAI_PROVIDER_ID
+            | codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID
+            | codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID
+    )
+}
+
 /// Default model used for memory extraction when a provider does not require a
 /// backend-specific model ID.
 pub const DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL: &str = "gpt-5.6-luna";
@@ -670,6 +682,30 @@ mod tests {
         for provider in ["kimi", "deepseek", "custom-gcp"] {
             assert!(approval_review_uses_parent_model(provider), "{provider}");
         }
+    }
+
+    #[test]
+    fn async_classifier_eligibility_is_independent_of_sync_reviewer_selection() {
+        for provider in [
+            codex_model_provider_info::OPENAI_PROVIDER_ID,
+            codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID,
+            codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID,
+        ] {
+            assert!(supports_guardian_async_classifier(provider), "{provider}");
+        }
+        for provider in [
+            codex_model_provider_info::GCP_PROVIDER_ID,
+            "kimi",
+            "deepseek",
+            "custom-gcp",
+        ] {
+            assert!(!supports_guardian_async_classifier(provider), "{provider}");
+        }
+        let gcp = create_model_provider(
+            ModelProviderInfo::create_gcp_provider(),
+            /*auth_manager*/ None,
+        );
+        assert_eq!(gcp.approval_review_preferred_model(), "gpt-6-luna");
     }
 
     use super::*;

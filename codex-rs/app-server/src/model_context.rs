@@ -45,7 +45,14 @@ mod tests {
         let owner = ConnectionId(1);
         registry.connect(owner).await;
         let id = registry
-            .insert(owner, config().await, ModelContextIntent::Start, None, 5)
+            .insert(
+                owner,
+                config().await,
+                ModelContextIntent::Start,
+                None,
+                "codex_cli_rs".into(),
+                5,
+            )
             .await
             .expect("handle");
         assert!(registry.get(owner, &id, 5).await.is_ok());
@@ -55,7 +62,14 @@ mod tests {
         assert!(registry.get(owner, &id, 5).await.is_err());
         assert!(
             registry
-                .insert(owner, config().await, ModelContextIntent::Start, None, 5)
+                .insert(
+                    owner,
+                    config().await,
+                    ModelContextIntent::Start,
+                    None,
+                    "codex_cli_rs".into(),
+                    5
+                )
                 .await
                 .is_err()
         );
@@ -71,13 +85,27 @@ mod tests {
         for _ in 0..MAX_PER_CONNECTION {
             ids.push(
                 registry
-                    .insert(owner, config.clone(), ModelContextIntent::Start, None, 1)
+                    .insert(
+                        owner,
+                        config.clone(),
+                        ModelContextIntent::Start,
+                        None,
+                        "codex_cli_rs".into(),
+                        1,
+                    )
                     .await
                     .expect("handle"),
             );
         }
         let error = registry
-            .insert(owner, config.clone(), ModelContextIntent::Start, None, 1)
+            .insert(
+                owner,
+                config.clone(),
+                ModelContextIntent::Start,
+                None,
+                "codex_cli_rs".into(),
+                1,
+            )
             .await
             .expect_err("limit");
         assert_eq!(
@@ -100,7 +128,14 @@ mod tests {
         assert_eq!(error.data.expect("reason")["reason"], "modelContextExpired");
         assert!(
             registry
-                .insert(owner, config, ModelContextIntent::Start, None, 1)
+                .insert(
+                    owner,
+                    config,
+                    ModelContextIntent::Start,
+                    None,
+                    "codex_cli_rs".into(),
+                    1
+                )
                 .await
                 .is_ok()
         );
@@ -112,7 +147,14 @@ mod tests {
         let owner = ConnectionId(1);
         registry.connect(owner).await;
         let id = registry
-            .insert(owner, config().await, ModelContextIntent::Start, None, 5)
+            .insert(
+                owner,
+                config().await,
+                ModelContextIntent::Start,
+                None,
+                "codex_cli_rs".into(),
+                5,
+            )
             .await
             .expect("handle");
         let (first, second) =
@@ -143,6 +185,7 @@ pub(crate) struct PendingModelContext {
     pub(crate) config: Arc<Config>,
     pub(crate) intent: ModelContextIntent,
     pub(crate) thread_id: Option<String>,
+    pub(crate) originator: String,
     pub(crate) owner_generation: u64,
     owner: ConnectionId,
     touched: Instant,
@@ -167,6 +210,7 @@ impl ModelContextRegistry {
         config: Arc<Config>,
         intent: ModelContextIntent,
         thread_id: Option<String>,
+        originator: String,
         owner_generation: u64,
     ) -> Result<String, JSONRPCErrorError> {
         let bytes = config
@@ -206,6 +250,7 @@ impl ModelContextRegistry {
                 config,
                 intent,
                 thread_id,
+                originator,
                 owner_generation,
                 owner,
                 touched: Instant::now(),

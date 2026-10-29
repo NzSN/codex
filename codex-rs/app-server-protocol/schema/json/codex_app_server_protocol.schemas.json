@@ -16036,6 +16036,13 @@
               "null"
             ]
           },
+          "serviceName": {
+            "description": "For start intent, use the same serviceName as thread/start so catalog discovery and attachment share an originator. Resume and fork inherit their source's originator.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "threadId": {
             "type": [
               "string",

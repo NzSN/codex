@@ -66,6 +66,7 @@ impl AppServerSession {
                 params: ModelContextResolveParams {
                     intent,
                     thread_id: thread_id.map(|id| id.to_string()),
+                    service_name: None,
                     cwd: if intent != ModelContextIntent::Resume {
                         thread_cwd_from_config(
                             config,

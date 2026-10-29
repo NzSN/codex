@@ -112,6 +112,10 @@ the live Kimi service or replace the installed daemon.
   initializes shared trusted-skill evidence before removing custom-provider classifier
   state. [Approval routing](../../codex-rs/ext/guardian-v2/src/async_scorer/approval.rs)
   prevents cached scores from authorizing or racing their synchronous reviews.
+  Async classifier eligibility is separate from synchronous reviewer selection:
+  GCP retains its native `gpt-6-luna` reviewer but does not initialize the unsupported
+  `gpt-5.6-luna` classifier or use its cached scores. Existing OpenAI and Bedrock
+  classifier eligibility is unchanged.
 - [Mixed-provider approval regressions](../../codex-rs/app-server/tests/suite/v2/mixed_provider_auto_review.rs)
   execute temporary marker commands, verify allow/deny behavior and outgoing model/tool
   declarations, exercise cold resume after catalog deletion, and repair a legacy

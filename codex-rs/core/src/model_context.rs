@@ -40,6 +40,7 @@ impl PartialEq for ResolvedModelContext {
         self.snapshot == other.snapshot
             && self.provider == other.provider
             && self.api_key_model_discovery == other.api_key_model_discovery
+            && self.catalog_originator == other.catalog_originator
     }
 }
 

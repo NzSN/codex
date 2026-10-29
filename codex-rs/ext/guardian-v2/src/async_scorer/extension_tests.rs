@@ -215,11 +215,11 @@ async fn custom_root_records_trusted_skills_without_starting_builtin_classifier(
     let registry = builder.build();
     let session_store = ExtensionData::new("skill-session");
     let turn_store = ExtensionData::new("skill-turn");
-    for provider in ["openai", "kimi"] {
+    for provider in ["openai", "kimi", "gcp"] {
         let mut config = test.config.clone();
         config.model_provider_id = provider.to_owned();
         config.features.enable(Feature::GuardianApproval)?;
-        config.approvals_reviewer = if provider == "kimi" {
+        config.approvals_reviewer = if provider != "openai" {
             ApprovalsReviewer::AutoReview
         } else {
             ApprovalsReviewer::User
@@ -260,7 +260,7 @@ async fn custom_root_records_trusted_skills_without_starting_builtin_classifier(
             vec![path.clone()],
             "provider {provider}"
         );
-        if provider == "kimi" {
+        if provider != "openai" {
             assert!(thread_store.get::<LunaSampler>().is_none());
             assert!(thread_store.get::<GuardianV2ScoreProgress>().is_none());
         }
@@ -271,6 +271,15 @@ async fn custom_root_records_trusted_skills_without_starting_builtin_classifier(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn custom_provider_drops_builtin_classifier_state_even_when_enabled() -> Result<()> {
+    assert_provider_drops_builtin_classifier_state("kimi").await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gcp_drops_builtin_classifier_state_even_when_enabled() -> Result<()> {
+    assert_provider_drops_builtin_classifier_state("gcp").await
+}
+
+async fn assert_provider_drops_builtin_classifier_state(provider_id: &str) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -314,7 +323,7 @@ async fn custom_provider_drops_builtin_classifier_state_even_when_enabled() -> R
     assert!(thread_store.get::<GuardianV2ScoreProgress>().is_some());
 
     // Provider identity wins over the inherited OpenAI display name/auth metadata.
-    config.model_provider_id = "kimi".to_owned();
+    config.model_provider_id = provider_id.to_owned();
     config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(input(&config, &session_store, thread_store))
@@ -3664,6 +3673,169 @@ impl codex_extension_api::SynchronousApprovalReviewer for CacheMiss {
     ) -> codex_extension_api::ExtensionFuture<'a, Option<ReviewDecision>> {
         Box::pin(async { Some(ReviewDecision::denied("cache miss")) })
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gcp_cannot_approve_from_cached_or_pending_async_scores() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let base_url = format!("{}/v1", server.uri());
+    let test = test_codex()
+        .with_model("gpt-6.1-sol")
+        .with_config(move |config| {
+            config.model_provider_id = "gcp".to_owned();
+            config.model_provider = ModelProviderInfo::create_gcp_provider();
+            config.model_provider.base_url = Some(base_url);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let mut builder = ExtensionRegistryBuilder::new();
+    super::install(
+        &mut builder,
+        test.thread_manager.auth_manager(),
+        Arc::downgrade(&test.thread_manager),
+    );
+    let registry = builder.build();
+    let store = test.codex.thread_extension_data();
+    let session_store = ExtensionData::new("cached-score-session");
+
+    // Seed valid classifier state as if it survived a provider switch. The
+    // approval gate must reject it even when startup cleanup was bypassed.
+    let mut config = test.config.clone();
+    config.model_provider_id = "openai".to_owned();
+    config.model_provider =
+        ModelProviderInfo::create_openai_provider(Some(format!("{}/v1", server.uri())));
+    config.features.enable(Feature::GuardianApproval)?;
+    config.features.enable(Feature::GuardianV2)?;
+    config.approvals_reviewer = ApprovalsReviewer::User;
+    let mut model = store.get::<ModelInfo>().unwrap().as_ref().clone();
+    model.guardian = Some(Default::default());
+    store.insert(model.clone());
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &SessionSource::Exec,
+            persistent_thread_state_available: false,
+            environments: &[],
+            mcp_resource_client: None,
+            extension_metrics: None,
+            session_store: &session_store,
+            thread_store: store,
+        })
+        .await;
+    model.guardian = Some(codex_protocol::openai_models::GuardianModelPolicy {
+        shell: Some(codex_protocol::openai_models::GuardianReviewMode::Adaptive),
+        ..Default::default()
+    });
+    store.insert(model);
+    let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+    let index = progress.observe(&ToolStartInput {
+        permissions: Box::pin(async { Some(Default::default()) }),
+        session_store: &session_store,
+        thread_store: store,
+        turn_store: &session_store,
+        turn_id: "turn",
+        root_turn_id: None,
+        call_id: "gcp-action",
+        originating_item_id: None,
+        tool_name: &ToolName::plain("shell"),
+        mcp_tool: None,
+        payload: &ToolPayload::Function {
+            arguments: r#"{"command":"echo test"}"#.to_owned(),
+        },
+        conversation_history: Arc::new(TestConversationHistory(Vec::new())),
+        source: ToolCallSource::Direct,
+    });
+    let authorization = ScoreAuthorization::current(&test.codex, &Default::default()).await;
+    seed_cached_score(&progress, store, index, authorization.clone());
+    assert!(
+        progress
+            .inspect(Some("gcp-action"))
+            .score_at_or_before_action
+    );
+
+    struct RequiredSync<'a> {
+        store: &'a ExtensionData,
+        progress: Arc<GuardianV2ScoreProgress>,
+        authorization: ScoreAuthorization,
+        index: usize,
+    }
+    impl codex_extension_api::SynchronousApprovalReviewer for RequiredSync<'_> {
+        fn review<'a>(
+            &'a self,
+            reason: codex_protocol::approvals::GuardianReviewReason,
+            async_approval: Option<codex_extension_api::ExtensionFuture<'a, ()>>,
+        ) -> codex_extension_api::ExtensionFuture<'a, Option<ReviewDecision>> {
+            Box::pin(async move {
+                assert_eq!(
+                    reason,
+                    codex_protocol::approvals::GuardianReviewReason::Policy
+                );
+                // A low score that arrives during review must also be ignored.
+                let mut score = cached_score(self.store).unwrap();
+                score.scores.insert("action_risk".to_owned(), 0.0);
+                score.sampled_at = Some(
+                    (std::time::SystemTime::from(score.sampled_at.unwrap())
+                        + Duration::from_secs(1))
+                    .into(),
+                );
+                assert!(
+                    self.progress
+                        .publish(score, self.authorization.clone(), self.index)
+                );
+                if let Some(mut async_approval) = async_approval {
+                    tokio::select! {
+                        biased;
+                        () = &mut async_approval => panic!("GCP must not race async approval"),
+                        () = std::future::ready(()) => {},
+                    }
+                }
+                Some(ReviewDecision::denied("synchronous GCP review"))
+            })
+        }
+    }
+    let reviewer = RequiredSync {
+        store,
+        progress,
+        authorization,
+        index,
+    };
+    let action = json!({"tool": "shell", "command": "echo test"});
+    let metrics = Arc::new(RecordingMetrics::default());
+    let input = codex_extension_api::ApprovalDecisionInput {
+        permissions: Some(&Default::default()),
+        approval_id: "gcp-cached-score",
+        tool_call_id: Some("gcp-action"),
+        action: &action,
+        thread_id: ThreadId::from_string(store.level_id())?,
+        thread_store: store,
+        category: GuardianScope::Shell,
+        approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
+        approvals_reviewer: ApprovalsReviewer::AutoReview,
+        require_guardian: false,
+        require_fresh_review: false,
+        full_access: false,
+        metrics: Some(metrics.clone()),
+        synchronous_reviewer: &reviewer,
+    };
+    for risk in [0.0, 1.0] {
+        let mut score = cached_score(store).unwrap();
+        score.scores.insert("action_risk".to_owned(), risk);
+        set_cached_score(store, score);
+        assert_eq!(
+            registry.decide_approval(&input).await,
+            Some(codex_extension_api::ApprovalDecision::Reviewed(
+                ReviewDecision::denied("synchronous GCP review")
+            ))
+        );
+    }
+    assert!(!metrics.0.lock().unwrap().iter().any(|sample| matches!(
+        sample,
+        RecordedMetric::Counter(name, _, _) if name == "codex.guardian_v2.adaptive_review"
+    )));
+    assert!(server.received_requests().await.unwrap().is_empty());
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

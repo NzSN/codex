@@ -32,6 +32,9 @@ async fn originator_context_scoping_is_stable_and_can_restore_the_default() -> a
     ));
     assert!(work.matches_config(&config));
     assert_eq!(default.snapshot, work.snapshot);
+    assert_ne!(default, work);
+    assert_ne!(work, chat);
+    assert_eq!(default, chat.for_originator("codex_cli_rs"));
     Ok(())
 }
 

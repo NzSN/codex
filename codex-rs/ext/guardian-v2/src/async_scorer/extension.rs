@@ -60,9 +60,9 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                 .thread_store
                 .insert(TrustedSkillRoots::from_config(input.config));
 
-            // Luna and Decisions are specialized backends. Custom-provider tasks
-            // use their own model through the synchronous reviewer instead.
-            if codex_model_provider::approval_review_uses_parent_model(
+            // Luna and Decisions are specialized backends. Providers without
+            // classifier support use their synchronous reviewer instead.
+            if !codex_model_provider::supports_guardian_async_classifier(
                 &input.config.model_provider_id,
             ) {
                 input.thread_store.remove::<ConversationBackend>();

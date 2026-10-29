@@ -613,6 +613,7 @@ impl ThreadRequestProcessor {
                 params.model_provider.as_deref(),
                 params.config.as_ref(),
                 params.cwd.as_deref(),
+                None,
             )
             .await?
         } else {
@@ -1252,6 +1253,7 @@ impl ThreadRequestProcessor {
                 params.model_provider.as_deref(),
                 params.config.as_ref(),
                 params.cwd.as_deref(),
+                params.service_name.as_deref(),
             )
             .await?;
         let ThreadStartParams {
@@ -5430,6 +5432,7 @@ impl ThreadRequestProcessor {
                 params.model_provider.as_deref(),
                 params.config.as_ref(),
                 params.cwd.as_deref(),
+                None,
             )
             .await?;
         if params.experimental_disable_prediction_mcp && !params.experimental_prediction_mode {

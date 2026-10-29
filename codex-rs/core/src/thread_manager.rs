@@ -426,6 +426,24 @@ fn effective_originator_value(
         .unwrap_or(default_originator)
 }
 
+/// Resolve the catalog originator consistently during discovery and thread startup.
+pub fn resolve_thread_originator(
+    service_name: Option<&str>,
+    persisted_originator: Option<String>,
+    inherited_originator: Option<String>,
+) -> String {
+    let env_originator = std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
+        .is_ok()
+        .then(|| originator().value);
+    effective_originator_value(
+        service_name,
+        env_originator,
+        persisted_originator,
+        inherited_originator,
+        originator().value,
+    )
+}
+
 pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) config: Config,
     pub(crate) prompt_cache_key: Option<PromptCacheKey>,
@@ -2049,15 +2067,10 @@ impl ThreadManagerState {
             InitialHistory::Resumed(_) | InitialHistory::Forked(_) => None,
         };
 
-        let env_originator = std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
-            .is_ok()
-            .then(|| originator().value);
-        effective_originator_value(
+        resolve_thread_originator(
             metrics_service_name,
-            env_originator,
             persisted_originator,
             inherited_originator.or(parent_originator),
-            originator().value,
         )
     }
 

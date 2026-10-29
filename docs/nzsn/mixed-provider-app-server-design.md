@@ -270,7 +270,13 @@ manager for both the retained configuration and runtime session, preserving stri
 approval-review ownership. Repeating the same originator is stable; switching to an
 ordinary originator restores the unscoped manager. Static catalogs retain their
 authoritative snapshot. Resume-time discovery restores the saved thread originator
-before listing models.
+before listing models. New-thread resolution accepts the same `serviceName` as
+`thread/start` and applies the shared originator precedence before discovery or
+default-model selection. Pending handles bind that effective originator; a mismatched
+start is rejected before consuming the handle, and attachment rechecks the runtime
+originator before returning it. Resume and fork inherit their source's originator
+and reject `serviceName` on resolution. Scoped contexts compare unequal when their
+catalog originators differ, even if their persisted routing snapshots are identical.
 
 Do not put raw credentials into cache keys or logs. Invalidate auth-sensitive discovery state on account transitions and recheck current visibility. Static metadata can remain a snapshot while current authorization is reevaluated. Provider configuration changes create a new context; they do not mutate an existing thread's route.
 

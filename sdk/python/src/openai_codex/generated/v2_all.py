@@ -2770,6 +2770,13 @@ class ModelContextResolveParams(BaseModel):
     model: str | None = None
     model_catalog_json: Annotated[str | None, Field(alias="modelCatalogJson")] = None
     model_provider: Annotated[str | None, Field(alias="modelProvider")] = None
+    service_name: Annotated[
+        str | None,
+        Field(
+            alias="serviceName",
+            description="For start intent, use the same serviceName as thread/start so catalog discovery and attachment share an originator. Resume and fork inherit their source's originator.",
+        ),
+    ] = None
     thread_id: Annotated[str | None, Field(alias="threadId")] = None
 
 

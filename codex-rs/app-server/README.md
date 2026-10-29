@@ -24,6 +24,12 @@ be resolved first. After attachment, use `threadId` for scoped model listing and
 `modelProvider/capabilities/read`. Cold metadata discovery uses a resume-intent
 resolution; direct thread selectors require a loaded thread.
 
+For a new thread with an originator-specific catalog, pass the same `serviceName`
+to `modelContext/resolve` and `thread/start`. Resolution selects the model from that
+originator's catalog; attachment rejects a different originator without consuming
+the handle. Resume and fork inherit the source thread's originator and do not accept
+`serviceName` during resolution.
+
 Catalog-path inputs are admitted only over stdio, the verified local control
 socket, or in-process connections. TCP WebSocket and remote-control clients can
 use host-configured catalog sources and authorized thread contexts. A native

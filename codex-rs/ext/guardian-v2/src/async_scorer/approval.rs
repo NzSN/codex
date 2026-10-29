@@ -68,8 +68,8 @@ impl GuardianApprovalReviewer {
             return ApprovalDecision::AskUser;
         }
         let config = thread.config().await;
-        let uses_parent_reviewer =
-            codex_model_provider::approval_review_uses_parent_model(&config.model_provider_id);
+        let supports_async_classifier =
+            codex_model_provider::supports_guardian_async_classifier(&config.model_provider_id);
         let model = input
             .thread_store
             .get::<codex_protocol::openai_models::ModelInfo>();
@@ -104,7 +104,7 @@ impl GuardianApprovalReviewer {
         }
         let adaptive = mode == GuardianReviewMode::Adaptive
             && !input.require_fresh_review
-            && !uses_parent_reviewer;
+            && supports_async_classifier;
         if adaptive && let Some(metrics) = input.metrics.as_deref() {
             metrics.counter("codex.guardian_v2.adaptive_review", /*inc*/ 1, &[]);
         }

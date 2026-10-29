@@ -44,6 +44,7 @@ pub use provider::ProviderUnauthorizedRecovery;
 pub use provider::SharedModelProvider;
 pub use provider::approval_review_uses_parent_model;
 pub use provider::create_model_provider;
+pub use provider::supports_guardian_async_classifier;
 
 #[cfg(test)]
 #[path = "workspace_routing_tests.rs"]

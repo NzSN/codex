@@ -4,10 +4,12 @@ use anyhow::Result;
 use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ModelContextIntent;
 use codex_app_server_protocol::ModelContextResolveParams;
 use codex_app_server_protocol::ModelContextResolveResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::TurnStartParams;
@@ -392,6 +394,282 @@ wire_api = "responses"
         })
         .await?;
     assert_eq!(context.model, "visible-target");
+    Ok(())
+}
+
+async fn originator_catalog_fixture() -> Result<(TempDir, wiremock::MockServer)> {
+    use wiremock::Mock;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let endpoint =
+        create_mock_responses_server_repeating_assistant("persist Work originator").await;
+    let home = TempDir::new()?;
+    for (originator, slug) in [
+        ("provider-default", "default-only"),
+        ("codex_work_cca", "work-only"),
+    ] {
+        let mut model = codex_models_manager::bundled_models_response()?
+            .models
+            .remove(0);
+        model.slug = slug.into();
+        model.visibility = ModelVisibility::List;
+        model.supported_in_api = true;
+        Mock::given(method("GET"))
+            .and(path("/catalog"))
+            .and(header("originator", originator))
+            .and(header("Authorization", "Bearer catalog-test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(ModelsResponse {
+                models: vec![model],
+            }))
+            .mount(&endpoint)
+            .await;
+    }
+    // Deliberately omit `model`: default selection must use the requested originator.
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            r#"
+model_provider = "catalog"
+[features]
+api_key_model_discovery = true
+code_mode = false
+code_mode_host = false
+enable_request_compression = false
+[model_providers.catalog]
+name = "Originator catalog fixture"
+base_url = "{uri}/v1"
+model_catalog_url = "{uri}/catalog"
+experimental_bearer_token = "catalog-test-key"
+wire_api = "responses"
+http_headers = {{ originator = "provider-default" }}
+"#,
+            uri = endpoint.uri()
+        ),
+    )?;
+    Ok((home, endpoint))
+}
+
+async fn assert_context_model(
+    server: &mut TestAppServer,
+    context: &ModelContextResolveResponse,
+    expected: &str,
+) -> Result<()> {
+    assert_eq!(context.model, expected);
+    let listed: ModelListResponse = server
+        .request(|request_id| ClientRequest::ModelList {
+            request_id,
+            params: ModelListParams {
+                model_context_id: Some(context.model_context_id.clone()),
+                ..Default::default()
+            },
+        })
+        .await?;
+    assert_eq!(listed.data.len(), 1);
+    assert_eq!(listed.data[0].model, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_context_resolution_binds_the_normalized_service_originator() -> Result<()> {
+    let (home, endpoint) = originator_catalog_fixture().await?;
+    let mut server = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .without_managed_config()
+        .build_initialized()
+        .await?;
+    let default_context: ModelContextResolveResponse = server
+        .request(|request_id| ClientRequest::ModelContextResolve {
+            request_id,
+            params: ModelContextResolveParams::default(),
+        })
+        .await?;
+    assert_context_model(&mut server, &default_context, "default-only").await?;
+    let default_thread = server
+        .start_thread(ThreadStartParams {
+            model_context_id: Some(default_context.model_context_id),
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(default_thread.model, "default-only");
+
+    for (model, resolve_service, start_service) in [
+        (Some("work-only"), " \tCoDeX_WoRk_CcA \n", "codex_work_cca"),
+        (None, "codex_work_cca", " CODEX_WORK_CCA "),
+    ] {
+        let context: ModelContextResolveResponse = server
+            .request(|request_id| ClientRequest::ModelContextResolve {
+                request_id,
+                params: ModelContextResolveParams {
+                    model: model.map(str::to_owned),
+                    service_name: Some(resolve_service.into()),
+                    ..Default::default()
+                },
+            })
+            .await?;
+        assert_context_model(&mut server, &context, "work-only").await?;
+        let requests_before = endpoint
+            .received_requests()
+            .await
+            .expect("recorded requests")
+            .len();
+        for service_name in [None, Some("codex_work_web")] {
+            let request = server
+                .send_thread_start_request_with_auto_env(ThreadStartParams {
+                    model_context_id: Some(context.model_context_id.clone()),
+                    service_name: service_name.map(str::to_owned),
+                    ..Default::default()
+                })
+                .await?;
+            let error = server
+                .read_stream_until_error_message(codex_app_server_protocol::RequestId::Integer(
+                    request,
+                ))
+                .await?;
+            assert_eq!(
+                error.error.data.expect("reason")["reason"],
+                "modelContextConflict"
+            );
+            assert_eq!(
+                endpoint
+                    .received_requests()
+                    .await
+                    .expect("recorded requests")
+                    .len(),
+                requests_before,
+                "an originator conflict must fail before provider I/O"
+            );
+        }
+        let started = server
+            .start_thread(ThreadStartParams {
+                model_context_id: Some(context.model_context_id),
+                service_name: Some(start_service.into()),
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(started.model, "work-only");
+        assert_eq!(started.thread.originator.as_deref(), Some("codex_work_cca"));
+    }
+    let default_list: ModelListResponse = server
+        .request(|request_id| ClientRequest::ModelList {
+            request_id,
+            params: ModelListParams::default(),
+        })
+        .await?;
+    assert_eq!(default_list.data.len(), 1);
+    assert_eq!(default_list.data[0].model, "default-only");
+    Ok(())
+}
+
+async fn assert_work_navigation_context(
+    server: &mut TestAppServer,
+    thread_id: &str,
+    intent: ModelContextIntent,
+) -> Result<()> {
+    let request = server
+        .send_request(
+            "modelContext/resolve",
+            Some(serde_json::to_value(ModelContextResolveParams {
+                intent,
+                thread_id: Some(thread_id.into()),
+                service_name: Some("codex_work_cca".into()),
+                ..Default::default()
+            })?),
+        )
+        .await?;
+    let error = server
+        .read_stream_until_error_message(codex_app_server_protocol::RequestId::Integer(request))
+        .await?;
+    assert_eq!(error.error.code, -32602);
+    assert!(error.error.message.contains("serviceName"));
+    let context: ModelContextResolveResponse = server
+        .request(|request_id| ClientRequest::ModelContextResolve {
+            request_id,
+            params: ModelContextResolveParams {
+                intent,
+                thread_id: Some(thread_id.into()),
+                ..Default::default()
+            },
+        })
+        .await?;
+    assert_context_model(server, &context, "work-only").await?;
+    let response: serde_json::Value = server
+        .request(|request_id| match intent {
+            ModelContextIntent::Resume => ClientRequest::ThreadResume {
+                request_id,
+                params: ThreadResumeParams {
+                    thread_id: thread_id.into(),
+                    model_context_id: Some(context.model_context_id),
+                    ..Default::default()
+                },
+            },
+            ModelContextIntent::Fork => ClientRequest::ThreadFork {
+                request_id,
+                params: ThreadForkParams {
+                    thread_id: thread_id.into(),
+                    model_context_id: Some(context.model_context_id),
+                    ..Default::default()
+                },
+            },
+            ModelContextIntent::Start => unreachable!("navigation requires resume or fork"),
+        })
+        .await?;
+    assert_eq!(response["model"], "work-only");
+    assert_eq!(response["thread"]["originator"], "codex_work_cca");
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_navigation_contexts_inherit_loaded_and_persisted_work_originators() -> Result<()> {
+    let (home, _endpoint) = originator_catalog_fixture().await?;
+    let mut server = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .without_managed_config()
+        .build_initialized()
+        .await?;
+    let context: ModelContextResolveResponse = server
+        .request(|request_id| ClientRequest::ModelContextResolve {
+            request_id,
+            params: ModelContextResolveParams {
+                model: Some("work-only".into()),
+                service_name: Some("codex_work_cca".into()),
+                ..Default::default()
+            },
+        })
+        .await?;
+    let started = server
+        .start_thread(ThreadStartParams {
+            model_context_id: Some(context.model_context_id),
+            service_name: Some("codex_work_cca".into()),
+            ..Default::default()
+        })
+        .await?;
+    server
+        .start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: started.thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "persist Work originator".into(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    for intent in [ModelContextIntent::Resume, ModelContextIntent::Fork] {
+        assert_work_navigation_context(&mut server, &started.thread.id, intent).await?;
+    }
+    assert!(server.shutdown_gracefully().await?.success());
+    // Restart separately for each intent, so both paths read persisted session metadata.
+    for intent in [ModelContextIntent::Resume, ModelContextIntent::Fork] {
+        let mut restarted = TestAppServer::builder()
+            .with_codex_home(home.path())
+            .without_managed_config()
+            .build_initialized()
+            .await?;
+        assert_work_navigation_context(&mut restarted, &started.thread.id, intent).await?;
+        assert!(restarted.shutdown_gracefully().await?.success());
+    }
     Ok(())
 }
 
