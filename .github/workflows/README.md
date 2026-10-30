@@ -10,9 +10,15 @@ revision: `rust-v0.165.0.1` means NzSN revision 1 of upstream `0.165.0` and
 requires Cargo workspace version `0.165.0`. NzSN revisions sort numerically
 within an upstream release; an omitted revision is equivalent to revision 0.
 Upstream stable and alpha/beta tags remain supported and require their exact
-Cargo workspace version. For a retry, use the workflow's manual trigger and
-provide the existing tag. Both triggers check out the tagged commit, so the
-tagged commit must include the workflow and validation support for its format.
+Cargo workspace version. For a retry, dispatch the workflow from `main` and
+provide the existing tag. The workflow definition comes from the dispatch ref;
+its build checks out the tagged source, whose release validator must support
+the tag format. This also allows workflow-only repairs to build an existing tag.
+
+The build installs the channel and components declared by the tagged source's
+`codex-rs/rust-toolchain.toml`, including the musl target for that channel.
+After configuring the hermetic Cargo home, a small `no_std` compilation verifies
+that the active source-selected toolchain has its target libraries installed.
 
 The release uploads only to `NzSN/codex` GitHub Releases. It does not invoke
 npm, PyPI, R2, WinGet, website deployment, or signing services. The downstream
