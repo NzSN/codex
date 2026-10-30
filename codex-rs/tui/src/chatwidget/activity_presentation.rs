@@ -15,10 +15,10 @@ impl ChatWidget {
             return ids;
         }
         for active in self.transcript.active_tools.items() {
-            let prefix = match &active.item {
-                codex_app_server_protocol::ThreadItem::CommandExecution { .. } => "exec",
-                codex_app_server_protocol::ThreadItem::McpToolCall { .. } => "mcp",
-                codex_app_server_protocol::ThreadItem::DynamicToolCall { .. } => "dynamic",
+            let prefix = match &active.item.payload {
+                codex_app_server_protocol::ThreadItemPayload::CommandExecution { .. } => "exec",
+                codex_app_server_protocol::ThreadItemPayload::McpToolCall { .. } => "mcp",
+                codex_app_server_protocol::ThreadItemPayload::DynamicToolCall { .. } => "dynamic",
                 _ => continue,
             };
             let id = format!("{prefix}:{}", active.item.id());

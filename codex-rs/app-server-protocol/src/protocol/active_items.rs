@@ -2,6 +2,7 @@
 use super::common::ServerNotification;
 use super::v2::ItemStartedNotification;
 use super::v2::ThreadItem;
+use super::v2::ThreadItemPayload;
 
 #[derive(Debug, Clone, Default)]
 pub struct ActiveItems {
@@ -41,15 +42,15 @@ impl ActiveItems {
 
 fn is_tool(item: &ThreadItem) -> bool {
     matches!(
-        item,
-        ThreadItem::CommandExecution { .. }
-            | ThreadItem::McpToolCall { .. }
-            | ThreadItem::DynamicToolCall { .. }
-            | ThreadItem::FileChange { .. }
-            | ThreadItem::WebSearch(_)
-            | ThreadItem::ImageGeneration(_)
-            | ThreadItem::ImageView { .. }
-            | ThreadItem::CollabAgentToolCall { .. }
+        &item.payload,
+        ThreadItemPayload::CommandExecution { .. }
+            | ThreadItemPayload::McpToolCall { .. }
+            | ThreadItemPayload::DynamicToolCall { .. }
+            | ThreadItemPayload::FileChange { .. }
+            | ThreadItemPayload::WebSearch(_)
+            | ThreadItemPayload::ImageGeneration(_)
+            | ThreadItemPayload::ImageView { .. }
+            | ThreadItemPayload::CollabAgentToolCall { .. }
     )
 }
 
@@ -156,28 +157,28 @@ mod tests {
 }
 
 /// Status-bearing tool items can also seed state from a resumed turn snapshot.
-pub fn is_in_progress_tool(item: &ThreadItem) -> bool {
+pub fn is_in_progress_tool(item: &ThreadItemPayload) -> bool {
     use super::v2::*;
-    if matches!(item, ThreadItem::WebSearch(search) if search.action.is_none())
-        || matches!(item, ThreadItem::ImageGeneration(image) if image.status.is_empty() || image.status == "in_progress")
+    if matches!(item, ThreadItemPayload::WebSearch(search) if search.action.is_none())
+        || matches!(item, ThreadItemPayload::ImageGeneration(image) if image.status.is_empty() || image.status == "in_progress")
     {
         return true;
     }
     matches!(
         item,
-        ThreadItem::CommandExecution {
+        ThreadItemPayload::CommandExecution {
             status: CommandExecutionStatus::InProgress,
             ..
-        } | ThreadItem::McpToolCall {
+        } | ThreadItemPayload::McpToolCall {
             status: McpToolCallStatus::InProgress,
             ..
-        } | ThreadItem::DynamicToolCall {
+        } | ThreadItemPayload::DynamicToolCall {
             status: DynamicToolCallStatus::InProgress,
             ..
-        } | ThreadItem::FileChange {
+        } | ThreadItemPayload::FileChange {
             status: PatchApplyStatus::InProgress,
             ..
-        } | ThreadItem::CollabAgentToolCall {
+        } | ThreadItemPayload::CollabAgentToolCall {
             status: CollabAgentToolCallStatus::InProgress,
             ..
         }

@@ -1,7 +1,7 @@
 #[cfg(test)]
 use codex_app_server_protocol::GeneratedImageRef;
 use codex_app_server_protocol::McpToolCallResult;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::Turn;
 use serde_json::Value as JsonValue;
 
@@ -18,19 +18,20 @@ pub(super) fn should_redact_thread_resume_payloads(client_name: Option<&str>) ->
 
 pub(super) fn redact_thread_resume_payloads(turns: &mut [Turn]) {
     for turn in turns {
-        turn.items.retain_mut(redact_item);
+        turn.items
+            .retain_mut(|entry| redact_item(&mut entry.payload));
     }
 }
 
 pub(super) fn redact_active_items(
     items: &mut Vec<codex_app_server_protocol::ItemStartedNotification>,
 ) {
-    items.retain_mut(|started| redact_item(&mut started.item));
+    items.retain_mut(|started| redact_item(&mut started.item.payload));
 }
 
-fn redact_item(item: &mut ThreadItem) -> bool {
+fn redact_item(item: &mut ThreadItemPayload) -> bool {
     match item {
-        ThreadItem::McpToolCall {
+        ThreadItemPayload::McpToolCall {
             arguments,
             result,
             error,
@@ -45,7 +46,7 @@ fn redact_item(item: &mut ThreadItem) -> bool {
             }
             true
         }
-        ThreadItem::ImageGeneration(_) => false,
+        ThreadItemPayload::ImageGeneration(_) => false,
         _ => true,
     }
 }
@@ -70,6 +71,7 @@ mod tests {
     use codex_app_server_protocol::McpToolCallStatus;
     use codex_app_server_protocol::SessionSource;
     use codex_app_server_protocol::Thread;
+    use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::TurnItemsView;
     use codex_app_server_protocol::TurnStatus;
@@ -80,7 +82,7 @@ mod tests {
     #[test]
     fn redacts_mcp_success_result_and_removes_image_generation() {
         let mut thread = test_thread(vec![
-            ThreadItem::AgentMessage {
+            ThreadItemPayload::AgentMessage {
                 id: "agent-1".to_string(),
                 text: "kept".to_string(),
                 phase: None,
@@ -88,7 +90,7 @@ mod tests {
                 delivery: None,
                 questions: None,
             },
-            ThreadItem::McpToolCall {
+            ThreadItemPayload::McpToolCall {
                 id: "mcp-1".to_string(),
                 server: "docs".to_string(),
                 tool: "lookup".to_string(),
@@ -116,7 +118,7 @@ mod tests {
                 error: None,
                 duration_ms: Some(8),
             },
-            ThreadItem::ImageGeneration(ImageGenerationItem {
+            ThreadItemPayload::ImageGeneration(ImageGenerationItem {
                 id: "ig-1".to_string(),
                 status: "completed".to_string(),
                 revised_prompt: Some("revised".to_string()),
@@ -131,13 +133,16 @@ mod tests {
                 generation_id: None,
             }),
         ]);
+        thread.turns[0].items[1].started_at_ms = Some(123);
+        thread.turns[0].items[2].started_at_ms = Some(456);
 
         redact_thread_resume_payloads(&mut thread.turns);
 
         assert_eq!(thread.turns[0].items.len(), 2);
+        assert_eq!(thread.turns[0].items[1].started_at_ms, Some(123));
         assert_eq!(
-            thread.turns[0].items[0],
-            ThreadItem::AgentMessage {
+            thread.turns[0].items[0].payload,
+            ThreadItemPayload::AgentMessage {
                 id: "agent-1".to_string(),
                 text: "kept".to_string(),
                 phase: None,
@@ -147,8 +152,8 @@ mod tests {
             }
         );
         assert_eq!(
-            thread.turns[0].items[1],
-            ThreadItem::McpToolCall {
+            thread.turns[0].items[1].payload,
+            ThreadItemPayload::McpToolCall {
                 id: "mcp-1".to_string(),
                 server: "docs".to_string(),
                 tool: "lookup".to_string(),
@@ -174,7 +179,7 @@ mod tests {
 
     #[test]
     fn redacts_mcp_error_message() {
-        let mut thread = test_thread(vec![ThreadItem::McpToolCall {
+        let mut thread = test_thread(vec![ThreadItemPayload::McpToolCall {
             id: "mcp-1".to_string(),
             server: "docs".to_string(),
             tool: "lookup".to_string(),
@@ -195,8 +200,8 @@ mod tests {
         redact_thread_resume_payloads(&mut thread.turns);
 
         assert_eq!(
-            thread.turns[0].items[0],
-            ThreadItem::McpToolCall {
+            thread.turns[0].items[0].payload,
+            ThreadItemPayload::McpToolCall {
                 id: "mcp-1".to_string(),
                 server: "docs".to_string(),
                 tool: "lookup".to_string(),
@@ -216,7 +221,7 @@ mod tests {
         );
     }
 
-    fn test_thread(items: Vec<ThreadItem>) -> Thread {
+    fn test_thread(items: Vec<ThreadItemPayload>) -> Thread {
         Thread {
             originator: None,
             environments: None,
@@ -252,7 +257,7 @@ mod tests {
             turns: vec![Turn {
                 id: "turn-1".to_string(),
                 root_turn_id: None,
-                items,
+                items: items.into_iter().map(ThreadItem::untimed).collect(),
                 items_view: TurnItemsView::Full,
                 status: TurnStatus::Completed,
                 error: None,

@@ -110,6 +110,18 @@ async fn scoped_native_catalog_retains_the_runtime_binding_for_custom_review() -
             .await;
         assert_eq!(info.description.as_deref(), Some(scope));
         assert!(!info.used_fallback_model_metadata);
+        let catalog = manager
+            .model_catalog_with_origins(
+                codex_models_manager::manager::RefreshStrategy::InMemory,
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            )
+            .await;
+        let selected = catalog
+            .iter()
+            .find(|entry| entry.model.slug == "shared-model-name")
+            .expect("scoped provider model");
+        assert_eq!(selected.origin, codex_models_manager::ModelOrigin::Provider);
+        assert_eq!(selected.model.description.as_deref(), Some(scope));
         assert!(
             !manager
                 .list_models(

@@ -216,6 +216,7 @@ requires_openai_auth = false
                 account: Some(Account::Chatgpt {
                     email: Some("host@example.com".into()),
                     plan_type: codex_protocol::account::PlanType::Business,
+                    workspace_name: None,
                 }),
                 requires_openai_auth: true,
                 workspace_routing: None,

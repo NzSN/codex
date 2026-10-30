@@ -112,14 +112,14 @@ jobs:
           set -euo pipefail
           export STABLE_GIT_COMMIT="$(git rev-parse HEAD)"
           cargo build --locked --release --target "$TARGET" \
-            --bin codex --bin codex-code-mode-host \
+            --bin codex --bin codex-code-mode-host --bin codex-exec-server \
             --bin codex-responses-api-proxy --bin codex-app-server
       - name: Archive symbols and strip binaries
         run: |
           bash "${GITHUB_WORKSPACE}/.github/scripts/archive-release-symbols-and-strip-binaries.sh" \
             --target "$TARGET" --artifact-name "$TARGET" \
             --release-dir "target/${TARGET}/release" --archive-dir dist \
-            --binaries "codex codex-code-mode-host codex-responses-api-proxy codex-app-server"
+            --binaries "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy codex-app-server"
       - name: Package CLI and app server with their resources
         run: |
           set -euo pipefail

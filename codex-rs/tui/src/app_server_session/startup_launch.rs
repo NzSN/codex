@@ -3,8 +3,11 @@
 
 use crate::legacy_core::config::ConfigOverrides;
 use codex_app_server_protocol::ApprovalsReviewer;
+use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_config::LoaderOverrides;
+use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
+use std::collections::HashMap;
 
 #[derive(Clone, Default)]
 pub(crate) struct StartupLaunchChoices {
@@ -14,7 +17,16 @@ pub(crate) struct StartupLaunchChoices {
     pub(crate) catalog_json: Option<String>,
     pub(crate) model_context_id: Option<String>,
     selected_profile: bool,
+    pub(super) approval_policy: StartupApprovalPolicy,
     pub(super) approvals_reviewer: StartupApprovalsReviewer,
+}
+
+#[derive(Clone, Default)]
+pub(super) enum StartupApprovalPolicy {
+    #[default]
+    ResolvedConfig,
+    Invocation(Option<AskForApproval>),
+    ConfigOverride(HashMap<String, serde_json::Value>),
 }
 
 #[derive(Clone, Copy, Default)]
@@ -42,6 +54,41 @@ impl StartupLaunchChoices {
             .approvals_reviewer
             .or_else(|| value("approvals_reviewer")?.clone().try_into().ok())
             .map(Into::into);
+        let approval_policy = if let Some(policy) = harness_overrides.approval_policy {
+            StartupApprovalPolicy::Invocation(Some(policy.into()))
+        } else if let Some(value) =
+            codex_config::build_cli_overrides_layer(cli_overrides).get("approval_policy")
+        {
+            if value.is_str()
+                && let Ok(policy) = value.clone().try_into::<CoreAskForApproval>()
+            {
+                StartupApprovalPolicy::Invocation(Some(policy.into()))
+            } else {
+                // Preserve each original assignment boundary: parent assignments replace,
+                // while dotted assignments merge with the server's CLI layer.
+                let overrides = cli_overrides
+                    .iter()
+                    .filter_map(|(path, _)| {
+                        let mut keys = path.split('.');
+                        if keys.next()? != "approval_policy"
+                            || cli_overrides.iter().any(|(parent, _)| {
+                                path.strip_prefix(parent)
+                                    .is_some_and(|suffix| suffix.starts_with('.'))
+                            })
+                        {
+                            return None;
+                        }
+                        let value = keys.try_fold(value, |value, key| value.get(key))?;
+                        Some((path.clone(), serde_json::json!(value)))
+                    })
+                    .collect();
+                StartupApprovalPolicy::ConfigOverride(overrides)
+            }
+        } else if selected_profile {
+            StartupApprovalPolicy::ResolvedConfig
+        } else {
+            StartupApprovalPolicy::Invocation(None)
+        };
         Self {
             model: harness_overrides.model.clone().or_else(|| {
                 value("model")
@@ -59,6 +106,7 @@ impl StartupLaunchChoices {
                 .and_then(toml::Value::as_str)
                 .map(str::to_owned),
             model_context_id: None,
+            approval_policy,
             selected_profile,
             approvals_reviewer: match (selected_profile, reviewer) {
                 (true, None) => StartupApprovalsReviewer::Config,
@@ -71,7 +119,23 @@ impl StartupLaunchChoices {
         self.provider.is_some() || self.catalog_json.is_some()
     }
 
+    pub(crate) fn apply_projectless_approval_policy(
+        &mut self,
+        policy: Option<CoreAskForApproval>,
+        allowed: Option<&[AskForApproval]>,
+    ) {
+        if let StartupApprovalPolicy::Invocation(None) = self.approval_policy
+            && let Some(policy) = policy.map(AskForApproval::from)
+            && allowed.is_none_or(|allowed| allowed.contains(&policy))
+        {
+            self.approval_policy = StartupApprovalPolicy::Invocation(Some(policy));
+        }
+    }
+
     pub(super) fn configure(self, params: &mut ThreadStartParams) {
+        if let StartupApprovalPolicy::ConfigOverride(overrides) = self.approval_policy {
+            params.config.get_or_insert_default().extend(overrides);
+        }
         if let Some(id) = self.model_context_id {
             params.model_context_id = Some(id);
             params.model = self.model;
@@ -110,6 +174,27 @@ mod mixed_provider_tests {
     use super::*;
 
     #[test]
+    fn selected_profile_retains_structured_approval_invocation_overrides() {
+        let choices = StartupLaunchChoices::from_launch(
+            &[(
+                "approval_policy.reject.rules".into(),
+                toml::Value::Boolean(true),
+            )],
+            &ConfigOverrides::default(),
+            &LoaderOverrides {
+                user_config_profile: Some("work".parse().expect("profile")),
+                ..Default::default()
+            },
+        );
+        let mut params = ThreadStartParams::default();
+        choices.configure(&mut params);
+        assert_eq!(
+            params.config.expect("invocation overrides")["approval_policy.reject.rules"],
+            serde_json::json!(true)
+        );
+    }
+
+    #[test]
     fn selected_profile_keeps_its_reviewer_without_an_invocation_override() {
         let choices = StartupLaunchChoices::from_launch(
             &[],
@@ -122,6 +207,10 @@ mod mixed_provider_tests {
         assert!(matches!(
             choices.approvals_reviewer,
             StartupApprovalsReviewer::Config
+        ));
+        assert!(matches!(
+            choices.approval_policy,
+            StartupApprovalPolicy::ResolvedConfig
         ));
     }
 

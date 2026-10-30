@@ -894,7 +894,12 @@ wire_api = "responses"
             error
                 .error
                 .message
-                .contains("required model provider settings changed"),
+                .contains("required model provider settings changed")
+                || error
+                    .error
+                    .data
+                    .as_ref()
+                    .is_some_and(|data| { data["type"] == "modelProviderPolicyConflict" }),
             "{method}: {error:?}"
         );
         assert_eq!(

@@ -440,3 +440,109 @@ formatter baseline, and cross-version receipts are retained under
 `.cache/upstream-0.165-merge/`. These are selected local checks, not a full workspace,
 native-Windows, Bazel, live-provider, or release-package qualification. The existing
 0.164.0 package and running daemon were not replaced by this source merge.
+
+## Upstream rust-v0.166.0 integration (2026-10-31)
+
+This integration starts from NzSN main `3100dfe51f1858dbc8c12b19604f3bcb63573fb5`
+and merges upstream `rust-v0.166.0`, whose tag object
+`593389380740f7b4762771573c447ccfdc59742f` resolves to
+`6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`. The actual merge base is
+`b559e6a3988489b636e1e79672eff330bf0679dc`. Both parent histories are retained.
+The fork release tag is `rust-v0.166.0.0`; Cargo workspace and local package
+lockfile versions remain the valid upstream Rust version `0.166.0`.
+
+Conflict resolution combines these behaviors:
+
+- Preserve provider-bound model contexts, catalog authority, originator scoping,
+  runtime-manager identity checks, and the custom-provider parent reviewer. The
+  provider catalog wrapper delegates upstream's new catalog-with-origins API;
+  the scoped-context regression also checks the selected model's provider origin.
+- Retain per-thread provider routing across daemon default changes. Upstream's
+  single-selected-provider equality rule conflicts with concurrent mixed-provider
+  clients, so admission keeps managed-policy and missing-definition validation
+  without imposing daemon-default equality. Regression cases cover retained routes,
+  missing-provider recovery, and policy failures before inference traffic.
+- Keep the GCP synchronous reviewer and the fork's GCP async-classifier exclusion,
+  alongside upstream's reviewer prompt preparation and bounded catalog refresh.
+- Preserve plaintext collaboration, provider-specific roles, evicted delivery
+  policies, payload-mode locking, and standalone custom-provider tool outputs.
+  Upstream separates child preparation from message delivery; plaintext size
+  validation remains before child allocation, while completion-envelope checks
+  stay in preparation. New tool-router fixtures include the fork's message policy.
+- Adapt running-tool tracking, replay, presentation, and resume redaction to
+  upstream's timestamped item envelopes. Preserve item IDs, available start times,
+  parallel activity, completion precedence, and activity independent of history
+  pagination and buffer eviction. Redaction changes payloads while retaining the
+  envelope. The renamed Astra plugin snapshot retains its prior bytes.
+- Retain explicit model/catalog/profile launch choices and reviewer precedence
+  while incorporating upstream's projectless approval defaults and server-owned
+  settings. Profile launches retain their resolved approval policy when no
+  invocation policy is provided, and structured invocation overrides survive the
+  profile path. Both cases have regression assertions.
+- Regenerate stable and experimental protocol exports and Python SDK models from
+  the merged Rust definitions. Update retained account fixtures for upstream's
+  optional workspace fields.
+- Keep GitHub-only Linux x86_64 musl releases on `ubuntu-24.04`, fourth-component
+  tag validation, and sidecar-symbol archival followed by stripping. Add upstream's
+  newly bundled `codex-exec-server` to the fork's build and symbol-archive inputs.
+
+The provider-role implementation and tests and the orphaned-stream integration
+suite retain their pre-merge bytes. Their combined stable patch ID against
+`rust-v0.165.0` remains `f2dc82c38aa965522b6c2daaf92e29e83edbfda5`.
+The preservation inventory and per-suite test listings are retained under
+`.cache/upstream-0.166-merge/`.
+
+Validation uses Rust 1.99.1 and unoptimized native GNU Linux binaries. The new
+upstream V8 Git dependency attempts to fetch native Chromium submodules even for
+prebuilt builds. Local validation instead uses `git archive` of the exact pinned
+Rust source commit `350c5a859a9b3c84ab8701b3ad51e3b7699b30c0`: all 163 archived blobs
+were verified against Git object IDs. The archive and binding inputs match the
+checked-in trusted manifest, whose SHA-256 is
+`1ec730635970ab1c0e8f4764ea113ad29d69d7f8d4c2ae69f3d766434a759350`.
+The local path substitution is confined to validation; the published manifest and
+lockfile retain upstream's Git dependency identity. Native V8 source-build
+submodules are outside this local validation. Async development fixtures use a
+32 MiB test-thread stack; the initial default-stack overflow receipt is retained.
+
+Final runtime checks passed **705 distinct selected Rust tests**:
+
+| Area | Passed |
+| --- | ---: |
+| Complete app-server protocol unit suite | 322 |
+| Complete provider unit suite | 136 |
+| Complete model-manager unit suite | 58 |
+| Core role, context, originator, plaintext, payload, projection, delivery, review, and moved dispatch tests | 95 |
+| App-server context, persisted resume, redaction, retained-route, and provider-policy units | 25 |
+| Core plaintext wire/scheduling and orphaned-stream integrations | 6 |
+| Mixed-provider, review, managed-policy, and provider-definition/recovery integrations | 26 |
+| TUI profile/provider startup, activity hydration, account scoping, and update-message snapshot | 37 |
+
+The protocol suite has one ignored generation helper, invoked separately for both
+stable and experimental exports. Every selected runtime filter was checked against
+a nonempty compiled inventory. Core, app-server, TUI, and CLI test targets passed
+type checking; the final app-server/TUI unit and integration targets were rebuilt
+following the provider-admission repair. The native CLI, app-server, code-mode host,
+standalone executor, sandbox, and config-schema generator built successfully.
+Workspace Rust formatting and whitespace checks passed. The generated config
+schema matches the merged fixture semantically. Existing upstream compiler and
+vendored-C warnings remain visible in the logs.
+
+The complete SDK run against the final merged native CLI passed **273 tests**, with
+**38 opt-in cases skipped**. Its external-input checks verify custom-provider
+synthetic call/output pairing, namespace authority, and stable call IDs across
+resume. Release/tag helpers passed 29 tests and package-layout/archive helpers
+passed 27 tests.
+
+Intermediate receipts are retained: the first mixed-provider integration run had
+eight provider-admission failures, repaired before the expanded 26-test run; the
+initial SDK run without its runtime had 46 setup failures; and the first native
+SDK run exposed three expected-wire mismatches with the fork's previously added
+call pairing. The final SDK run includes the corrected pairing assertions. Only
+the inspected update-message snapshot was accepted, retaining upstream's new
+installer command and replacing its Bazel placeholder version with Cargo 0.166.0.
+
+These are selected native GNU Linux source checks. Full-workspace, Bazel,
+native-Windows, live-provider, native V8 source-build, and musl release-package
+qualification were not run locally. The requested hosted release build uses the
+published tag, restored upstream dependency identity, and the fork's existing
+GitHub-only Linux musl workflow.

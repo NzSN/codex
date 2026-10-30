@@ -2,6 +2,7 @@
 
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
+use codex_models_manager::CatalogModel;
 use codex_models_manager::ModelsManagerConfig;
 use codex_models_manager::manager::ModelsManager;
 use codex_models_manager::manager::ModelsManagerFuture;
@@ -34,6 +35,14 @@ impl ModelsManager for ProviderCatalogModelsManager {
         factory: HttpClientFactory,
     ) -> ModelsManagerFuture<'_, ModelsResponse> {
         self.0.raw_model_catalog(strategy, factory)
+    }
+
+    fn model_catalog_with_origins(
+        &self,
+        strategy: RefreshStrategy,
+        factory: HttpClientFactory,
+    ) -> ModelsManagerFuture<'_, Vec<CatalogModel>> {
+        self.0.model_catalog_with_origins(strategy, factory)
     }
 
     fn refresh_after_auth_change(&self, factory: HttpClientFactory) -> ModelsManagerFuture<'_, ()> {

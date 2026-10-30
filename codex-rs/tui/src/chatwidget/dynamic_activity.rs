@@ -3,10 +3,10 @@
 use super::*;
 
 impl ChatWidget {
-    pub(super) fn on_dynamic_tool_item(&mut self, item: ThreadItem) {
+    pub(super) fn on_dynamic_tool_item(&mut self, item: ThreadItemPayload) {
         let started = matches!(
             &item,
-            ThreadItem::DynamicToolCall {
+            ThreadItemPayload::DynamicToolCall {
                 status: codex_app_server_protocol::DynamicToolCallStatus::InProgress,
                 ..
             }
@@ -24,8 +24,8 @@ impl ChatWidget {
         );
     }
 
-    pub(crate) fn handle_dynamic_tool_item_now(&mut self, item: ThreadItem) {
-        let ThreadItem::DynamicToolCall { id, .. } = &item else {
+    pub(crate) fn handle_dynamic_tool_item_now(&mut self, item: ThreadItemPayload) {
+        let ThreadItemPayload::DynamicToolCall { id, .. } = &item else {
             return;
         };
         let id = id.clone();
@@ -78,8 +78,8 @@ impl ChatWidget {
             .map(|started| -> Box<dyn HistoryCell> {
                 let animations =
                     self.local_settings.tui.animations && self.local_settings.tui.effects.progress;
-                match &started.item {
-                    ThreadItem::CommandExecution {
+                match &started.item.payload {
+                    ThreadItemPayload::CommandExecution {
                         id,
                         command,
                         command_actions,
@@ -100,7 +100,7 @@ impl ChatWidget {
                             animations,
                         ));
                     }
-                    ThreadItem::McpToolCall {
+                    ThreadItemPayload::McpToolCall {
                         id,
                         server,
                         tool,
@@ -117,21 +117,23 @@ impl ChatWidget {
                             animations,
                         ));
                     }
-                    ThreadItem::DynamicToolCall { .. } => {
-                        if let Some(cell) =
-                            history_cell::DynamicToolCallCell::from_item(started.item.clone())
-                        {
+                    ThreadItemPayload::DynamicToolCall { .. } => {
+                        if let Some(cell) = history_cell::DynamicToolCallCell::from_item(
+                            started.item.payload.clone(),
+                        ) {
                             return Box::new(cell);
                         }
                     }
                     _ => {}
                 }
-                let label = match &started.item {
-                    ThreadItem::CommandExecution { command, .. } => format!("Running {command}"),
-                    ThreadItem::McpToolCall { server, tool, .. } => {
+                let label = match &started.item.payload {
+                    ThreadItemPayload::CommandExecution { command, .. } => {
+                        format!("Running {command}")
+                    }
+                    ThreadItemPayload::McpToolCall { server, tool, .. } => {
                         format!("Calling {server}/{tool}")
                     }
-                    ThreadItem::DynamicToolCall {
+                    ThreadItemPayload::DynamicToolCall {
                         namespace, tool, ..
                     } => format!(
                         "Calling {}{tool}",
@@ -140,7 +142,7 @@ impl ChatWidget {
                             .map(|n| format!("{n}."))
                             .unwrap_or_default()
                     ),
-                    ThreadItem::CollabAgentToolCall { tool, .. } => {
+                    ThreadItemPayload::CollabAgentToolCall { tool, .. } => {
                         use codex_app_server_protocol::CollabAgentTool;
                         match tool {
                             CollabAgentTool::Wait => "Waiting for agents",
@@ -155,10 +157,10 @@ impl ChatWidget {
                         }
                         .to_string()
                     }
-                    ThreadItem::FileChange { .. } => "Applying patch".to_string(),
-                    ThreadItem::WebSearch(_) => "Searching the web".to_string(),
-                    ThreadItem::ImageGeneration(_) => "Generating image".to_string(),
-                    ThreadItem::ImageView { .. } => "Opening image".to_string(),
+                    ThreadItemPayload::FileChange { .. } => "Applying patch".to_string(),
+                    ThreadItemPayload::WebSearch(_) => "Searching the web".to_string(),
+                    ThreadItemPayload::ImageGeneration(_) => "Generating image".to_string(),
+                    ThreadItemPayload::ImageView { .. } => "Opening image".to_string(),
                     _ => "Running tool".to_string(),
                 };
                 Box::new(history_cell::PlainHistoryCell::new(vec![

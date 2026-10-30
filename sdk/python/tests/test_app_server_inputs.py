@@ -16,14 +16,28 @@ from openai_codex import (
     SkillInput,
     TextInput,
 )
+from openai_codex.generated.v2_all import FunctionCallOutputThreadItem
+from openai_codex.types import ThreadItem
 
 
 def _external_items(request) -> list[dict]:
-    """Select model-visible external content without generated item identifiers."""
+    """Validate custom-provider call pairing before comparing external payloads."""
+    items = request.input()
+    outputs = [item for item in items if item.get("type") == "function_call_output"]
+    for output in outputs:
+        call_id = output["call_id"]
+        assert call_id.startswith("call_codex_delivery_")
+        [call] = [
+            item
+            for item in items
+            if item.get("type") == "function_call" and item.get("call_id") == call_id
+        ]
+        assert call["name"] == output["name"]
+        assert call.get("namespace") == output.get("namespace")
+        assert call["arguments"] == "{}"
     return [
-        {key: value for key, value in item.items() if key != "id"}
-        for item in request.input()
-        if item.get("type") == "function_call_output"
+        {key: value for key, value in item.items() if key not in ("id", "call_id")}
+        for item in outputs
     ]
 
 
@@ -49,12 +63,30 @@ def test_external_message_preserves_tool_authority_through_resume(tmp_path) -> N
         with Codex(config=harness.app_server_config()) as codex:
             resumed = codex.thread_resume(thread.id, include_turns=False)
             history = resumed.read(include_turns=True)
-            assert external_item in history.thread.turns[0].items
+            persisted = next(
+                item
+                for item in history.thread.turns[0].items
+                if item.root.id == external_item.root.id
+            )
+            assert isinstance(persisted, ThreadItem)
+            assert isinstance(persisted.root, FunctionCallOutputThreadItem)
+            assert persisted.root.started_at_ms is not None
+            assert persisted.root.completed_at_ms is not None
+            assert persisted == external_item
             resumed.run("Summarize the external update.")
         requests = harness.responses.requests()
 
     assert result.final_response == "Update received"
     assert [_external_items(request) for request in requests] == [[expected], [expected]]
+    assert [
+        item["call_id"]
+        for item in requests[0].input()
+        if item.get("type") == "function_call_output"
+    ] == [
+        item["call_id"]
+        for item in requests[1].input()
+        if item.get("type") == "function_call_output"
+    ]
     assert [
         text
         for request in requests
