@@ -2,6 +2,7 @@ import io
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -9,10 +10,45 @@ from unittest.mock import patch
 
 from npm_alpha_tag import npm_alpha_tag
 import publish_r2_release as r2
-from releases import is_valid_release_version, should_make_latest, should_update_version
+from releases import (
+    is_valid_release_version,
+    should_make_latest,
+    should_update_version,
+    workspace_version_for_release,
+)
 
 
 class VersionComparisonTest(unittest.TestCase):
+    def test_validation_accepts_nzsn_revision(self) -> None:
+        self.assertTrue(is_valid_release_version("0.165.0.1"))
+
+    def test_validation_rejects_malformed_nzsn_revisions(self) -> None:
+        for version in (
+            "0.165.0.",
+            "0.165.0.one",
+            "0.165.0.-1",
+            "0.165.0.1.2",
+            "0.165.0.1-alpha.1",
+        ):
+            with self.subTest(version=version):
+                self.assertFalse(is_valid_release_version(version))
+
+    def test_nzsn_revision_ordering(self) -> None:
+        for version, current, expected in (
+            ("0.165.0.1", "0.165.0", True),
+            ("0.165.0", "0.165.0.1", False),
+            ("0.165.0.10", "0.165.0.2", True),
+            ("0.165.0.2", "0.165.0.10", False),
+            ("0.165.0.1", "0.165.0.1", False),
+            ("0.165.0.0", "0.165.0", False),
+            ("0.165.0", "0.165.0.0", False),
+            ("0.164.0.99", "0.165.0-alpha.1", False),
+            ("0.166.0-alpha.1", "0.165.0.99", True),
+            ("0.165.0.1", "0.165.0-beta.2", True),
+        ):
+            with self.subTest(version=version, current=current):
+                self.assertEqual(should_update_version(version, current), expected)
+
     def test_validation_accepts_alpha_hotfix(self) -> None:
         self.assertTrue(is_valid_release_version("0.123.0-alpha.5.2"))
 
@@ -59,6 +95,47 @@ class VersionComparisonTest(unittest.TestCase):
 
     def test_invalid_release_version(self) -> None:
         self.assertRaises(ValueError, should_update_version, "0.123", "")
+
+
+class ReleaseWorkspaceVersionTest(unittest.TestCase):
+    def test_maps_only_the_nzsn_revision_to_the_upstream_version(self) -> None:
+        for version, expected in (
+            ("0.165.0.1", "0.165.0"),
+            ("0.165.0.10", "0.165.0"),
+            ("0.165.0", "0.165.0"),
+            ("0.165.0-alpha.5.2", "0.165.0-alpha.5.2"),
+            ("0.165.0-beta.1", "0.165.0-beta.1"),
+        ):
+            with self.subTest(version=version):
+                self.assertEqual(workspace_version_for_release(version), expected)
+
+    def test_rejects_invalid_release_version(self) -> None:
+        with self.assertRaises(ValueError):
+            workspace_version_for_release("0.165.0.1.2")
+
+    def test_workflow_cli_accepts_matching_versions_and_rejects_mismatches(self) -> None:
+        for version, workspace, expected in (
+            ("0.165.0.1", "0.165.0", True),
+            ("0.165.0", "0.165.0", True),
+            ("0.165.0-alpha.5.2", "0.165.0-alpha.5.2", True),
+            ("0.165.0.1", "0.164.0", False),
+            ("0.165.0.1", "0.165.0-alpha.1", False),
+            ("0.165.0-alpha.5.2", "0.165.0", False),
+            ("0.165.0.1.2", "0.165.0", False),
+        ):
+            with self.subTest(version=version, workspace=workspace):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(Path(__file__).with_name("releases.py")),
+                        version,
+                        "--workspace-version",
+                        workspace,
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode == 0, expected, result.stderr)
 
 
 class NpmAlphaTagTest(unittest.TestCase):
@@ -186,6 +263,14 @@ class NpmAlphaTagTest(unittest.TestCase):
 
 
 class StablePublicationTests(unittest.TestCase):
+    def test_github_latest_accepts_and_orders_nzsn_revisions(self):
+        latest = {"tag_name": "rust-v0.165.0.2", "draft": False, "prerelease": False}
+        self.assertFalse(should_make_latest("0.165.0", latest))
+        self.assertFalse(should_make_latest("0.165.0.1", latest))
+        self.assertTrue(should_make_latest("0.165.0.2", latest))
+        self.assertTrue(should_make_latest("0.165.0.10", latest))
+        self.assertTrue(should_make_latest("0.166.0", latest))
+
     def test_github_latest_orders_numerically_and_allows_equal_reruns(self):
         latest = {"tag_name": "rust-v0.100.0", "draft": False, "prerelease": False}
         self.assertFalse(should_make_latest("0.99.9", latest))

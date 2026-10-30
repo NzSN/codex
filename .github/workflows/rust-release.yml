@@ -47,10 +47,11 @@ jobs:
           tag = os.environ["RELEASE_TAG"]
           assert tag.startswith("rust-v"), f"Unexpected release tag: {tag}"
           version = tag.removeprefix("rust-v")
-          subprocess.run(["python3", ".github/scripts/releases.py", version], check=True)
           cargo_version = tomllib.loads(Path("codex-rs/Cargo.toml").read_text())["workspace"]["package"]["version"]
-          assert version == cargo_version, f"Tag {version} != Cargo.toml {cargo_version}"
-          print(f"Release tag and Cargo.toml agree: {version}")
+          subprocess.run(
+              ["python3", ".github/scripts/releases.py", version, "--workspace-version", cargo_version],
+              check=True,
+          )
           PYTHON
 
   build:

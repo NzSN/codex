@@ -4,8 +4,15 @@
 
 `rust-release.yml` builds only `x86_64-unknown-linux-musl` on the standard
 `ubuntu-24.04` GitHub runner. Push a `rust-v<version>` tag pointing to a commit
-whose `codex-rs/Cargo.toml` workspace version matches the tag. For a retry, use
-the workflow's manual trigger and provide the existing tag.
+whose `codex-rs/Cargo.toml` workspace version matches the upstream version in
+the tag. Stable fork tags may append a fourth numeric component for the NzSN
+revision: `rust-v0.165.0.1` means NzSN revision 1 of upstream `0.165.0` and
+requires Cargo workspace version `0.165.0`. NzSN revisions sort numerically
+within an upstream release; an omitted revision is equivalent to revision 0.
+Upstream stable and alpha/beta tags remain supported and require their exact
+Cargo workspace version. For a retry, use the workflow's manual trigger and
+provide the existing tag. Both triggers check out the tagged commit, so the
+tagged commit must include the workflow and validation support for its format.
 
 The release uploads only to `NzSN/codex` GitHub Releases. It does not invoke
 npm, PyPI, R2, WinGet, website deployment, or signing services. The downstream

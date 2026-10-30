@@ -6,8 +6,9 @@ import re
 import sys
 
 _VERSION_RE = re.compile(
-    r"^[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha(?:\.[0-9]+){0,2}"
-    r"|beta(?:\.[0-9]+)?))?$"
+    r"^(?P<upstream>[0-9]+\.[0-9]+\.[0-9]+)"
+    r"(?:\.[0-9]+|(?P<prerelease>-(?:alpha(?:\.[0-9]+){0,2}"
+    r"|beta(?:\.[0-9]+)?)))?$"
 )
 
 
@@ -19,13 +20,23 @@ def is_valid_stable_release_version(version: str) -> bool:
     return is_valid_release_version(version) and "-" not in version
 
 
-def _version_key(version: str) -> tuple[tuple[int, ...], int, tuple[int, ...]]:
+def workspace_version_for_release(version: str) -> str:
+    """Map a release to Cargo's version, omitting a stable NzSN revision."""
+    match = _VERSION_RE.fullmatch(version)
+    if match is None:
+        raise ValueError(f"invalid release version: {version}")
+    return match["upstream"] + (match["prerelease"] or "")
+
+
+def _version_key(version: str) -> tuple[tuple[int, ...], int, tuple[int, ...], int]:
     base, _, prerelease = version.partition("-")
+    parts = tuple(int(part) for part in base.split("."))
     channel, _, suffix = prerelease.partition(".")
     return (
-        tuple(int(part) for part in base.split(".")),
+        parts[:3],
         {"alpha": 0, "beta": 1, "": 2}[channel],
         tuple(int(part) for part in suffix.split(".")) if suffix else (),
+        parts[3] if len(parts) == 4 else 0,
     )
 
 
@@ -60,12 +71,29 @@ def should_make_latest(version: str, latest: dict) -> bool:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("version")
-    parser.add_argument(
+    checks = parser.add_mutually_exclusive_group()
+    checks.add_argument(
         "--check-github",
         choices=("latest", "canary"),
         help="Compare with the latest release JSON or canary Cargo.toml on stdin.",
     )
+    checks.add_argument(
+        "--workspace-version",
+        help="Require the matching Cargo version, excluding any stable NzSN revision.",
+    )
     args = parser.parse_args()
+    if args.workspace_version is not None:
+        try:
+            expected = workspace_version_for_release(args.version)
+        except ValueError as error:
+            parser.error(str(error))
+        if args.workspace_version != expected:
+            parser.error(
+                f"Release {args.version} requires Cargo.toml {expected}, "
+                f"got {args.workspace_version}"
+            )
+        print(f"Release {args.version} matches Cargo.toml {args.workspace_version}")
+        raise SystemExit(0)
     if args.check_github is None:
         raise SystemExit(0 if is_valid_release_version(args.version) else 1)
     if args.check_github == "latest":
