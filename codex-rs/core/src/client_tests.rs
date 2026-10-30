@@ -144,6 +144,80 @@ fn test_model_provider() -> SharedModelProvider {
     test_model_client(SessionSource::Cli).state.provider.clone()
 }
 
+#[test_case::test_matrix([false, true], [false, true], ["create_thread", "send_message_to_thread"])]
+fn responses_request_pairs_standalone_tool_outputs_only_for_custom_providers(
+    openai: bool,
+    responses_lite: bool,
+    tool: &str,
+) -> anyhow::Result<()> {
+    let mut client = test_model_client(SessionSource::Cli);
+    if openai {
+        Arc::get_mut(&mut client.state).unwrap().provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            /*auth_manager*/ None,
+        );
+    }
+    let notification = serde_json::from_value(json!({
+        "type": "function_call_output",
+        "id": "fco_delivery",
+        "name": tool,
+        "namespace": "codex_tui",
+        "output": "<codex_delegation><input>Review Vol1 section 3.1.</input></codex_delegation>",
+    }))?;
+    let prompt = Prompt {
+        input: vec![notification],
+        base_instructions: BaseInstructions {
+            text: String::new(),
+            provenance: None,
+        },
+        ..Default::default()
+    };
+    let history = prompt.input.clone();
+    let mut model = test_model_info();
+    model.use_responses_lite = responses_lite;
+    let metadata = test_responses_metadata_for_client(
+        &client,
+        /*turn_id*/ None,
+        format!("{}:0", client.state.thread_id),
+        /*parent_thread_id*/ None,
+        TestCodexResponsesRequestKind::Turn,
+    );
+    let build = || {
+        client.build_responses_request(
+            &prompt,
+            &model,
+            /*effort*/ None,
+            codex_protocol::config_types::ReasoningSummary::None,
+            /*service_tier*/ None,
+            &metadata,
+            /*include_internal*/ false,
+        )
+    };
+    let request = build()?;
+    assert_eq!(request, build()?);
+    assert_eq!(prompt.input, history);
+    if openai {
+        assert_eq!(request.input, history);
+    } else {
+        let wire = serde_json::to_value(&request)?;
+        let input = wire["input"].as_array().unwrap();
+        assert_eq!(input.len(), 2);
+        assert_eq!(input[0]["type"], "function_call");
+        assert_eq!(input[1]["type"], "function_call_output");
+        assert!(!input[0]["call_id"].as_str().unwrap().is_empty());
+        assert_eq!(input[0]["call_id"], input[1]["call_id"]);
+        assert_eq!(
+            input[1]["output"],
+            serde_json::to_value(&history)?[0]["output"]
+        );
+        assert_eq!(input[1]["id"], "fco_delivery");
+        assert_eq!(input[0]["arguments"], "{}");
+        let websocket = serde_json::to_value(codex_api::ResponseCreateWsRequest::from(&request))?;
+        assert_eq!(websocket["input"], wire["input"]);
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn workspace_routed_http_rejects_redirects_without_a_routing_header() {
     use codex_client::HttpTransport;

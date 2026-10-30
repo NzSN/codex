@@ -17,6 +17,55 @@ fn empty_tools() -> Arc<RawValue> {
     Arc::from(RawValue::from_string("[]".to_string()).expect("valid tool JSON"))
 }
 
+#[test]
+fn standalone_tool_outputs_have_stable_unique_matching_calls() -> anyhow::Result<()> {
+    let notification: ResponseItem = serde_json::from_value(serde_json::json!({
+        "type": "function_call_output",
+        "name": "create_thread",
+        "namespace": "codex_tui",
+        "output": [{"type": "input_text", "text": "Review the supplied source."}],
+    }))?;
+    let mut input = vec![notification.clone(), notification.clone()];
+    pair_standalone_tool_outputs(&mut input)?;
+    let first_pass = input.clone();
+    pair_standalone_tool_outputs(&mut input)?;
+    assert_eq!(input, first_pass);
+    let wire = serde_json::to_value(&input)?;
+    assert_eq!(wire.as_array().unwrap().len(), 4);
+    for pair in wire.as_array().unwrap().chunks_exact(2) {
+        assert_eq!(pair[0]["type"], "function_call");
+        assert_eq!(pair[1]["type"], "function_call_output");
+        assert_eq!(pair[0]["call_id"], pair[1]["call_id"]);
+        assert!(pair[0]["call_id"].as_str().unwrap().starts_with("call_"));
+        assert_eq!(pair[0]["name"], "create_thread");
+        assert_eq!(pair[0]["namespace"], "codex_tui");
+        assert_eq!(pair[0]["arguments"], "{}");
+        assert_eq!(
+            pair[1]["output"],
+            serde_json::to_value(&notification)?["output"]
+        );
+    }
+    assert_ne!(wire[0]["call_id"], wire[2]["call_id"]);
+
+    // Real history may already contain a call with the generated ID. Reserve
+    // IDs across the whole request before inserting any synthetic calls.
+    let mut colliding = vec![
+        notification.clone(),
+        first_pass[0].clone(),
+        first_pass[1].clone(),
+    ];
+    let original_pair = colliding[1..].to_vec();
+    pair_standalone_tool_outputs(&mut colliding)?;
+    let collision_wire = serde_json::to_value(&colliding)?;
+    assert_ne!(collision_wire[0]["call_id"], wire[0]["call_id"]);
+    assert_eq!(colliding[2..], original_pair);
+
+    let mut retry = vec![notification.clone(), notification];
+    pair_standalone_tool_outputs(&mut retry)?;
+    assert_eq!(retry, first_pass);
+    Ok(())
+}
+
 fn prompt_with_image_outputs(detail: Option<ImageDetail>) -> Prompt {
     Prompt {
         input: vec![

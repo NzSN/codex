@@ -1063,6 +1063,7 @@ impl ModelClient {
             }
         }
         if !is_openai {
+            crate::client_common::pair_standalone_tool_outputs(&mut input)?;
             for item in &mut input {
                 item.clear_internal_chat_message_metadata_passthrough();
                 if !matches!(
