@@ -18,25 +18,35 @@ pub(super) fn should_redact_thread_resume_payloads(client_name: Option<&str>) ->
 
 pub(super) fn redact_thread_resume_payloads(turns: &mut [Turn]) {
     for turn in turns {
-        turn.items.retain_mut(|item| match item {
-            ThreadItem::McpToolCall {
-                arguments,
-                result,
-                error,
-                ..
-            } => {
-                *arguments = JsonValue::String(REDACTED_PAYLOAD.to_string());
-                if result.is_some() {
-                    *result = Some(Box::new(redacted_mcp_tool_call_result()));
-                }
-                if let Some(error) = error {
-                    error.message = REDACTED_PAYLOAD.to_string();
-                }
-                true
+        turn.items.retain_mut(redact_item);
+    }
+}
+
+pub(super) fn redact_active_items(
+    items: &mut Vec<codex_app_server_protocol::ItemStartedNotification>,
+) {
+    items.retain_mut(|started| redact_item(&mut started.item));
+}
+
+fn redact_item(item: &mut ThreadItem) -> bool {
+    match item {
+        ThreadItem::McpToolCall {
+            arguments,
+            result,
+            error,
+            ..
+        } => {
+            *arguments = JsonValue::String(REDACTED_PAYLOAD.to_string());
+            if result.is_some() {
+                *result = Some(Box::new(redacted_mcp_tool_call_result()));
             }
-            ThreadItem::ImageGeneration(_) => false,
-            _ => true,
-        });
+            if let Some(error) = error {
+                error.message = REDACTED_PAYLOAD.to_string();
+            }
+            true
+        }
+        ThreadItem::ImageGeneration(_) => false,
+        _ => true,
     }
 }
 

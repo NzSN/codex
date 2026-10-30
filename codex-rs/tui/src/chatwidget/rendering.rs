@@ -184,6 +184,25 @@ impl ChatWidget {
         };
         let mut flex = FlexRenderable::new();
         flex.push(/*flex*/ 1, active_cell_renderable);
+        for (started, cell) in self
+            .transcript
+            .active_tools
+            .items()
+            .iter()
+            .zip(&self.transcript.active_tool_rows)
+        {
+            if !self.active_tool_has_primary_row(started.item.id()) {
+                flex.push(
+                    1,
+                    RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
+                        child: cell.as_ref(),
+                        top: 1,
+                        right: active_cell_right_reserve,
+                        persistent_layout: None,
+                    })),
+                );
+            }
+        }
         for cell in self
             .realtime_conversation
             .pending_history_cells
@@ -305,6 +324,17 @@ impl ChatWidget {
                     .map(|cell| cell as &dyn HistoryCell),
             );
         let mut lines = Vec::new();
+        for (started, cell) in self
+            .transcript
+            .active_tools
+            .items()
+            .iter()
+            .zip(&self.transcript.active_tool_rows)
+        {
+            if !self.active_tool_has_primary_row(started.item.id()) {
+                lines.extend(render_cell(cell.as_ref(), width));
+            }
+        }
         for cell in cells {
             let cell_lines = render_cell(cell, width);
             if !cell_lines.is_empty() && !lines.is_empty() {

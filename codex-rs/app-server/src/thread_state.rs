@@ -49,6 +49,7 @@ pub(crate) struct PendingThreadResumeRequest {
     pub(crate) emit_thread_goal_update: bool,
     pub(crate) thread_goal_state_db: Option<StateDbHandle>,
     pub(crate) include_turns: bool,
+    pub(crate) include_active_items: bool,
     pub(crate) initial_turns_page:
         Option<codex_app_server_protocol::ThreadResumeInitialTurnsPageParams>,
     pub(crate) paginated_turns: Option<Vec<Turn>>,
@@ -165,6 +166,13 @@ impl ThreadState {
         &self,
     ) -> Option<mpsc::UnboundedSender<ThreadListenerCommand>> {
         self.listener_command_tx.clone()
+    }
+
+    pub(crate) fn active_items(
+        &self,
+        thread_id: &str,
+    ) -> Vec<codex_app_server_protocol::ItemStartedNotification> {
+        self.current_turn_history.active_items(thread_id)
     }
 
     pub(crate) fn active_turn_snapshot(&self) -> Option<Turn> {

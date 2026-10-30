@@ -20,6 +20,17 @@ impl ChatWidget {
         {
             return;
         }
+        if matches!(
+            &notification,
+            ServerNotification::ItemStarted(_)
+                | ServerNotification::ItemCompleted(_)
+                | ServerNotification::TurnStarted(_)
+                | ServerNotification::TurnCompleted(_)
+                | ServerNotification::ThreadClosed(_)
+        ) {
+            self.transcript.active_tools.note(&notification);
+            self.refresh_active_tool_rows();
+        }
         let was_replaying_turn_completion = self.thread_usage.replaying_turn_completion;
         if replay_kind.is_some()
             || matches!(

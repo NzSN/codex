@@ -68,6 +68,8 @@ pub(super) struct ThreadEventStore {
     pub(super) active_turn_id: Option<String>,
     // Retain the active item even if its start falls out of the bounded replay buffer.
     pub(super) active_reasoning_item: Option<codex_app_server_protocol::ItemStartedNotification>,
+    active_items: codex_app_server_protocol::ActiveItems,
+    completed_since_refresh: std::collections::HashSet<(String, String)>,
     // Lifecycle identity must survive bounded replay-buffer eviction.
     pub(super) latest_turn_id: Option<String>,
     pub(super) pending_interrupt_turn_id: Option<String>,
@@ -114,6 +116,8 @@ impl ThreadEventStore {
             pending_interactive_replay: PendingInteractiveReplayState::default(),
             active_turn_id: None,
             active_reasoning_item: None,
+            active_items: Default::default(),
+            completed_since_refresh: Default::default(),
             latest_turn_id: None,
             pending_interrupt_turn_id: None,
             input_state: None,
@@ -148,6 +152,27 @@ impl ThreadEventStore {
     }
 
     pub(super) fn set_turns(&mut self, turns: Vec<Turn>) {
+        self.active_items = Default::default();
+        for turn in &turns {
+            if turn.status == TurnStatus::InProgress {
+                for item in &turn.items {
+                    if codex_app_server_protocol::is_in_progress_tool(item)
+                        && !self
+                            .completed_since_refresh
+                            .contains(&(turn.id.clone(), item.id().to_string()))
+                    {
+                        self.active_items.note(&ServerNotification::ItemStarted(
+                            codex_app_server_protocol::ItemStartedNotification {
+                                thread_id: String::new(),
+                                turn_id: turn.id.clone(),
+                                item: item.clone(),
+                                started_at_ms: turn.started_at.unwrap_or_default() * 1000,
+                            },
+                        ));
+                    }
+                }
+            }
+        }
         if self.active_reasoning_item.as_ref().is_some_and(|started| {
             turns.iter().any(|turn| {
                 (turn.id == started.turn_id && turn.status != TurnStatus::InProgress)
@@ -165,6 +190,13 @@ impl ThreadEventStore {
             .map(|turn| turn.id.clone());
         self.latest_turn_id = turns.last().map(|turn| turn.id.clone());
         self.turns = turns;
+        self.completed_since_refresh.clear();
+        // Live events received during hydration supersede its earlier snapshot.
+        for event in &self.buffer {
+            if let ThreadBufferedEvent::Notification(notification) = event {
+                self.active_items.note(notification);
+            }
+        }
     }
 
     pub(super) fn set_active_turn_id(&mut self, turn_id: String) {
@@ -181,6 +213,28 @@ impl ThreadEventStore {
     }
 
     fn push_notification_inner(&mut self, notification: Cow<'_, ServerNotification>) {
+        match notification.as_ref() {
+            ServerNotification::ItemCompleted(n)
+                if matches!(
+                    &n.item,
+                    ThreadItem::CommandExecution { .. }
+                        | ThreadItem::McpToolCall { .. }
+                        | ThreadItem::DynamicToolCall { .. }
+                        | ThreadItem::FileChange { .. }
+                        | ThreadItem::WebSearch(_)
+                        | ThreadItem::ImageGeneration(_)
+                        | ThreadItem::CollabAgentToolCall { .. }
+                ) =>
+            {
+                self.completed_since_refresh
+                    .insert((n.turn_id.clone(), n.item.id().to_string()));
+            }
+            ServerNotification::TurnStarted(_) | ServerNotification::ThreadClosed(_) => {
+                self.completed_since_refresh.clear()
+            }
+            _ => {}
+        }
+        self.active_items.note(notification.as_ref());
         let user_item = match notification.as_ref() {
             ServerNotification::ItemStarted(n) => Some((&n.turn_id, &n.item)),
             ServerNotification::ItemCompleted(n) => Some((&n.turn_id, &n.item)),
@@ -376,6 +430,29 @@ impl ThreadEventStore {
             active_reasoning_item: self.active_reasoning_item.clone(),
             input_state: self.input_state.clone(),
         };
+        // A completion may have arrived while history hydration was in flight.
+        // Never replay an older pending item as a live action after that completion.
+        for turn in &mut snapshot.turns {
+            turn.items.retain(|item| {
+                !codex_app_server_protocol::is_in_progress_tool(item)
+                    || self
+                        .active_items
+                        .items()
+                        .iter()
+                        .any(|active| active.turn_id == turn.id && active.item.id() == item.id())
+            });
+        }
+        for started in self.active_items.items() {
+            let present = snapshot.turns.iter().any(|turn| turn.id == started.turn_id && turn.items.iter().any(|item| item.id() == started.item.id()))
+                || snapshot.events.iter().any(|event| matches!(event, ThreadBufferedEvent::Notification(n) if matches!(n.as_ref(), ServerNotification::ItemStarted(n) if n.turn_id == started.turn_id && n.item.id() == started.item.id())));
+            if !present {
+                snapshot
+                    .events
+                    .push(ThreadBufferedEvent::Notification(Box::new(
+                        ServerNotification::ItemStarted(started.clone()),
+                    )));
+            }
+        }
         if let Some(latest_turn_id) = &self.latest_turn_id {
             replay_filter::omit_resolved_misalignment_errors(&mut snapshot, latest_turn_id);
         }
@@ -1137,5 +1214,73 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(retained, vec!["Typed tail", "Typed tail"]);
+    }
+}
+
+#[cfg(test)]
+mod active_action_tests {
+    use super::*;
+    fn started(id: &str) -> codex_app_server_protocol::ItemStartedNotification {
+        serde_json::from_value(serde_json::json!({
+            "threadId":"thread", "turnId":"turn", "startedAtMs":123,
+            "item":{"type":"dynamicToolCall", "id":id,"namespace":"tools",
+                "tool":"work","arguments":{},"status":"inProgress",
+                "contentItems":null,"success":null,"durationMs":null}
+        }))
+        .unwrap()
+    }
+    #[test]
+    fn active_actions_completion_wins_over_stale_hydration_after_eviction() {
+        let mut store = ThreadEventStore::new(1);
+        store.push_notification(ServerNotification::ItemStarted(started("first")));
+        store.push_notification(ServerNotification::ItemCompleted(
+            codex_app_server_protocol::ItemCompletedNotification {
+                thread_id: "thread".into(),
+                turn_id: "turn".into(),
+                item: started("first").item,
+                completed_at_ms: 500,
+            },
+        ));
+        store.push_notification(ServerNotification::ItemStarted(started("second")));
+        store.set_turns(vec![Turn {
+            id: "turn".into(),
+            root_turn_id: None,
+            items_view: codex_app_server_protocol::TurnItemsView::Summary,
+            items: vec![started("first").item],
+            status: TurnStatus::InProgress,
+            error: None,
+            started_at: Some(0),
+            completed_at: None,
+            duration_ms: None,
+        }]);
+        assert!(
+            store
+                .active_items
+                .items()
+                .iter()
+                .all(|item| item.item.id() != "first")
+        );
+        assert!(store.snapshot().turns[0].items.is_empty());
+    }
+
+    #[test]
+    fn active_actions_survive_buffer_eviction_and_clear_individually() {
+        let mut store = ThreadEventStore::new(1);
+        store.push_notification(ServerNotification::ItemStarted(started("first")));
+        store.push_notification(ServerNotification::ItemStarted(started("second")));
+        let snapshot = store.snapshot();
+        for id in ["first", "second"] {
+            assert!(snapshot.events.iter().any(|event| matches!(event, ThreadBufferedEvent::Notification(n) if matches!(n.as_ref(), ServerNotification::ItemStarted(n) if n.item.id() == id))));
+        }
+        store.push_notification(ServerNotification::ItemCompleted(
+            codex_app_server_protocol::ItemCompletedNotification {
+                thread_id: "thread".into(),
+                turn_id: "turn".into(),
+                item: started("first").item,
+                completed_at_ms: 500,
+            },
+        ));
+        assert_eq!(store.active_items.items().len(), 1);
+        assert_eq!(store.active_items.items()[0].item.id(), "second");
     }
 }

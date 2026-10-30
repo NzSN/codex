@@ -432,6 +432,9 @@ pub struct ThreadResumeParams {
     /// and `thread/items/list` instead.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
+    /// Include currently running tool items independently of paginated history.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_active_items: bool,
     /// When present, include a `thread/turns/list` page in the resume response
     /// so clients can bootstrap recent turns without a second request.
     #[experimental("thread/resume.initialTurnsPage")]
@@ -439,10 +442,37 @@ pub struct ThreadResumeParams {
     pub initial_turns_page: Option<ThreadResumeInitialTurnsPageParams>,
 }
 
+/// A running action captured at the thread resume subscription boundary.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadActiveItem {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item: ThreadItem,
+    #[ts(type = "number")]
+    pub started_at_ms: i64,
+}
+
+impl From<super::ItemStartedNotification> for ThreadActiveItem {
+    fn from(started: super::ItemStartedNotification) -> Self {
+        Self {
+            thread_id: started.thread_id,
+            turn_id: started.turn_id,
+            item: started.item,
+            started_at_ms: started.started_at_ms,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadResumeResponse {
+    /// Live activity at the serialized subscription boundary; absent on older servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub active_items: Option<Vec<ThreadActiveItem>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub model_context: Option<super::model::ModelContextInfo>,

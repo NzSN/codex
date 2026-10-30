@@ -6,10 +6,27 @@ use crate::transcript_view::ActivityTranscriptLines;
 
 impl ChatWidget {
     pub(crate) fn active_activity_ids(&self) -> Vec<String> {
-        self.transcript
+        let mut ids = self
+            .transcript
             .active_cell
             .as_ref()
-            .map_or_else(Vec::new, |cell| cell.activity_ids())
+            .map_or_else(Vec::new, |cell| cell.activity_ids());
+        if self.external_writer_view {
+            return ids;
+        }
+        for active in self.transcript.active_tools.items() {
+            let prefix = match &active.item {
+                codex_app_server_protocol::ThreadItem::CommandExecution { .. } => "exec",
+                codex_app_server_protocol::ThreadItem::McpToolCall { .. } => "mcp",
+                codex_app_server_protocol::ThreadItem::DynamicToolCall { .. } => "dynamic",
+                _ => continue,
+            };
+            let id = format!("{prefix}:{}", active.item.id());
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids
     }
 
     /// Render only the chosen activity presentation, before any auxiliary live text.

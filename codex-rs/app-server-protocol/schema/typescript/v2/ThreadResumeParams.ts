@@ -41,4 +41,7 @@ personality?: Personality | null, /**
  * is deprecated for paginated threads; use this with `thread/turns/list`
  * and `thread/items/list` instead.
  */
-excludeTurns?: boolean};
+excludeTurns?: boolean, /**
+ * Include currently running tool items independently of paginated history.
+ */
+includeActiveItems?: boolean};

@@ -1820,3 +1820,91 @@ async fn stream_recovery_restores_previous_status_header() {
     assert!(chat.bottom_pane.status_widget().is_none());
     assert!(chat.active_cell_is_stream_tail());
 }
+
+#[tokio::test]
+async fn switched_active_actions_render_parallel_tools_and_remove_completed_row() {
+    for fullscreen in [false, true] {
+        let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+        chat.local_settings.tui.fullscreen_transcript = fullscreen;
+        chat.local_settings.transcript_mode = if fullscreen {
+            crate::transcript_mode::TranscriptMode::Owned
+        } else {
+            crate::transcript_mode::TranscriptMode::Terminal
+        };
+        for id in ["first", "second"] {
+            let started = serde_json::from_value(json!({
+                "threadId":"thread", "turnId":"turn", "startedAtMs":123,
+                "item":{"type":"dynamicToolCall", "id":id,"namespace":"tools",
+                    "tool":id,"arguments":{},"status":"inProgress",
+                    "contentItems":null,"success":null,"durationMs":null}
+            }))
+            .unwrap();
+            chat.handle_server_notification(
+                ServerNotification::ItemStarted(started),
+                Some(ReplayKind::ThreadSnapshot),
+            );
+        }
+        assert_eq!(chat.transcript.active_tool_rows.len(), 2);
+        assert_eq!(chat.active_activity_ids().len(), 2);
+        let lines = if fullscreen {
+            let rendered = chat.active_cell_owned_transcript_lines(80, false).unwrap();
+            rendered
+                .activity
+                .into_iter()
+                .chain(rendered.auxiliary)
+                .collect::<Vec<_>>()
+        } else {
+            chat.active_cell_display_hyperlink_lines(80)
+                .unwrap_or_default()
+        };
+        let rendered = lines
+            .iter()
+            .map(|line| line.line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("first"));
+        assert!(rendered.contains("second"));
+        let mut item = chat.transcript.active_tools.items()[0].item.clone();
+        if let AppServerThreadItem::DynamicToolCall { status, .. } = &mut item {
+            *status = codex_app_server_protocol::DynamicToolCallStatus::Completed;
+        }
+        chat.handle_server_notification(
+            ServerNotification::ItemCompleted(
+                codex_app_server_protocol::ItemCompletedNotification {
+                    thread_id: "thread".into(),
+                    turn_id: "turn".into(),
+                    item,
+                    completed_at_ms: 500,
+                },
+            ),
+            Some(ReplayKind::ThreadSnapshot),
+        );
+        assert_eq!(chat.transcript.active_tool_rows.len(), 1);
+        assert_eq!(chat.transcript.active_tools.items()[0].item.id(), "second");
+    }
+}
+
+#[tokio::test]
+async fn switched_active_actions_show_unclassified_running_command() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+    let started = serde_json::from_value(json!({
+        "threadId":"thread", "turnId":"turn", "startedAtMs":123,
+        "item":{"type":"commandExecution", "id":"command", "command":"sleep 30",
+            "cwd":"/tmp", "processId":"process", "source":"unifiedExecStartup",
+            "status":"inProgress", "commandActions":[], "aggregatedOutput":null,
+            "exitCode":null,"durationMs":null}
+    }))
+    .unwrap();
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(started),
+        Some(ReplayKind::ThreadSnapshot),
+    );
+    let rendered = chat
+        .active_cell_display_hyperlink_lines(80)
+        .unwrap_or_default()
+        .iter()
+        .map(|line| line.line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("sleep 30"));
+}

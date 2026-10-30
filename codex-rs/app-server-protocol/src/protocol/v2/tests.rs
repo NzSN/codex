@@ -289,6 +289,7 @@ fn thread_resume_params_accept_turns_page_bootstrap() {
 #[test]
 fn thread_resume_response_round_trips_initial_turns_page() {
     let response = ThreadResumeResponse {
+        active_items: None,
         model_context: None,
         disabled_plugin_ids: Vec::new(),
         thread: Thread {

@@ -10,8 +10,12 @@ import type { AskForApproval } from "./AskForApproval";
 import type { ModelContextInfo } from "./ModelContextInfo";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { Thread } from "./Thread";
+import type { ThreadActiveItem } from "./ThreadActiveItem";
 
-export type ThreadResumeResponse = {modelContext?: ModelContextInfo, thread: Thread, model: string, modelProvider: string, serviceTier: string | null, /**
+export type ThreadResumeResponse = {/**
+ * Live activity at the serialized subscription boundary; absent on older servers.
+ */
+activeItems?: Array<ThreadActiveItem>, modelContext?: ModelContextInfo, thread: Thread, model: string, modelProvider: string, serviceTier: string | null, /**
  * Saved list of disabled plugin IDs. Does not yet filter plugin capabilities.
  */
 disabledPluginIds: Array<string>, cwd: AbsolutePathBuf, /**

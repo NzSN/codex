@@ -157,6 +157,24 @@ impl ChatWidget {
                 });
             let mut replaying_delegation = false;
             for item in items {
+                if status == TurnStatus::InProgress
+                    && codex_app_server_protocol::is_in_progress_tool(&item)
+                {
+                    self.transcript
+                        .active_tools
+                        .note(&ServerNotification::ItemStarted(
+                            codex_app_server_protocol::ItemStartedNotification {
+                                thread_id: self
+                                    .thread_id
+                                    .map(|id| id.to_string())
+                                    .unwrap_or_default(),
+                                turn_id: turn_id.clone(),
+                                item: item.clone(),
+                                started_at_ms: started_at.unwrap_or_default() * 1000,
+                            },
+                        ));
+                    self.refresh_active_tool_rows();
+                }
                 if matches!(&item, ThreadItem::UserMessage { content, .. }
                     if realtime::realtime_delegation_input(content).is_some())
                 {

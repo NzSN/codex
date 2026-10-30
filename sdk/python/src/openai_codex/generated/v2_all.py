@@ -6019,6 +6019,13 @@ class ThreadResumeParams(BaseModel):
             description="When true, return only thread metadata and live-resume state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after resuming. Full-history hydration is deprecated for paginated threads; use this with `thread/turns/list` and `thread/items/list` instead.",
         ),
     ] = None
+    include_active_items: Annotated[
+        bool | None,
+        Field(
+            alias="includeActiveItems",
+            description="Include currently running tool items independently of paginated history.",
+        ),
+    ] = None
     model: Annotated[
         str | None, Field(description="Configuration overrides for the resumed thread, if any.")
     ] = None
@@ -12390,6 +12397,16 @@ class Thread(BaseModel):
     ]
 
 
+class ThreadActiveItem(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    item: ThreadItem
+    started_at_ms: Annotated[int, Field(alias="startedAtMs")]
+    thread_id: Annotated[str, Field(alias="threadId")]
+    turn_id: Annotated[str, Field(alias="turnId")]
+
+
 class ThreadForkResponse(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -12471,6 +12488,13 @@ class ThreadResumeResponse(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    active_items: Annotated[
+        list[ThreadActiveItem] | None,
+        Field(
+            alias="activeItems",
+            description="Live activity at the serialized subscription boundary; absent on older servers.",
+        ),
+    ] = None
     approval_policy: Annotated[AskForApproval, Field(alias="approvalPolicy")]
     approvals_reviewer: Annotated[
         ApprovalsReviewer,

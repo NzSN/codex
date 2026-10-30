@@ -682,6 +682,7 @@ fn sample_thread_start_response() -> ClientResponsePayload {
 
 fn sample_thread_resume_response() -> ClientResponsePayload {
     ClientResponsePayload::ThreadResume(ThreadResumeResponse {
+        active_items: None,
         model_context: None,
         disabled_plugin_ids: Vec::new(),
         thread: sample_thread("thread-2"),

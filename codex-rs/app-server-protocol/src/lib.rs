@@ -11,6 +11,8 @@ pub use precomputed_exports::generate_json_with_experimental;
 pub use precomputed_exports::generate_ts;
 pub use precomputed_exports::generate_ts_with_options;
 pub use precomputed_exports::generate_types;
+pub use protocol::active_items::ActiveItems;
+pub use protocol::active_items::is_in_progress_tool;
 pub use protocol::common::*;
 pub use protocol::event_mapping::*;
 pub use protocol::item_builders::*;

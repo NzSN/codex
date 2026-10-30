@@ -1591,6 +1591,14 @@ impl App {
         snapshot
             .events
             .retain_mut(ThreadEventStore::event_survives_session_refresh);
+        if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+            let store = channel.store.lock().await;
+            let refreshed = store.snapshot();
+            snapshot.turns = refreshed.turns;
+            snapshot.events.extend(refreshed.events.into_iter().filter(|event| {
+                matches!(event, ThreadBufferedEvent::Notification(n) if matches!(n.as_ref(), ServerNotification::ItemStarted(_)))
+            }));
+        }
     }
 
     /// Opens the `/subagents` picker after refreshing cached labels for known threads.

@@ -912,7 +912,23 @@ pub(super) async fn handle_pending_thread_resume_request(
     let session_id = conversation.startup_metadata().session_id.to_string();
     thread.session_id = session_id;
 
+    let mut active_items = if pending.include_active_items {
+        Some(
+            thread_state
+                .lock()
+                .await
+                .active_items(&conversation_id.to_string()),
+        )
+    } else {
+        None
+    };
+    if pending.redact_resume_payloads
+        && let Some(items) = &mut active_items
+    {
+        super::thread_resume_redaction::redact_active_items(items);
+    }
     let response = ThreadResumeResponse {
+        active_items: active_items.map(|items| items.into_iter().map(Into::into).collect()),
         model_context: conversation
             .config()
             .await

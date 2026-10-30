@@ -4138,6 +4138,7 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
             exclude_turns,
+            include_active_items,
             initial_turns_page,
         } = params.clone();
         let include_turns = !exclude_turns;
@@ -4676,6 +4677,7 @@ impl ThreadRequestProcessor {
 
                 let thread_originator = config_snapshot.originator.clone();
                 let response = ThreadResumeResponse {
+                    active_items: include_active_items.then(Vec::new),
                     model_context: codex_thread
                         .config()
                         .await
@@ -5077,6 +5079,7 @@ impl ThreadRequestProcessor {
                     emit_thread_goal_update,
                     thread_goal_state_db,
                     include_turns,
+                    include_active_items: params.include_active_items,
                     initial_turns_page: params.initial_turns_page.clone(),
                     paginated_turns,
                     paginated_initial_turns_page,

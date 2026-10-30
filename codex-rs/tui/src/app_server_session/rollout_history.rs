@@ -225,6 +225,7 @@ impl AppServerSession {
         if params.exclude_turns {
             rollout_maintenance_guard = None;
         }
+        params.include_active_items = true;
         let request_id = self.next_request_id();
         let resume_response = self
             .client
@@ -241,6 +242,19 @@ impl AppServerSession {
             {
                 self.history_support = ThreadHistorySupport::LegacyOnly;
                 params.exclude_turns = false;
+                let request_id = self.next_request_id();
+                self.client
+                    .request_typed(ClientRequest::ThreadResume { request_id, params })
+                    .await
+                    .map_err(|err| {
+                        bootstrap_request_error("thread/resume failed during TUI bootstrap", err)
+                    })?
+            }
+            Err(TypedRequestError::Server { source, .. })
+                if source.message.contains("includeActiveItems") =>
+            {
+                // Older strict servers may reject an unknown optional parameter.
+                params.include_active_items = false;
                 let request_id = self.next_request_id();
                 self.client
                     .request_typed(ClientRequest::ThreadResume { request_id, params })
@@ -270,6 +284,38 @@ impl AppServerSession {
             HistoryHydrationScope::Initial,
         )
         .await?;
+        if let Some(active_items) = response.active_items.take() {
+            for turn in &mut response.thread.turns {
+                turn.items
+                    .retain(|item| !codex_app_server_protocol::is_in_progress_tool(item));
+            }
+            for started in active_items {
+                if let Some(turn) = response
+                    .thread
+                    .turns
+                    .iter_mut()
+                    .find(|turn| turn.id == started.turn_id)
+                {
+                    turn.status = codex_app_server_protocol::TurnStatus::InProgress;
+                    turn.completed_at = None;
+                    turn.error = None;
+                    turn.items.retain(|item| item.id() != started.item.id());
+                    turn.items.push(started.item);
+                } else {
+                    response.thread.turns.push(codex_app_server_protocol::Turn {
+                        id: started.turn_id,
+                        root_turn_id: None,
+                        items: vec![started.item],
+                        items_view: TurnItemsView::Summary,
+                        status: codex_app_server_protocol::TurnStatus::InProgress,
+                        error: None,
+                        started_at: Some(started.started_at_ms / 1000),
+                        completed_at: None,
+                        duration_ms: None,
+                    });
+                }
+            }
+        }
         let fork_parent_title = self
             .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
             .await;

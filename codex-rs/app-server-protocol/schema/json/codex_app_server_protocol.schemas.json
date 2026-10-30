@@ -21650,6 +21650,31 @@
         ],
         "type": "string"
       },
+      "ThreadActiveItem": {
+        "description": "A running action captured at the thread resume subscription boundary.",
+        "properties": {
+          "item": {
+            "$ref": "#/definitions/v2/ThreadItem"
+          },
+          "startedAtMs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item",
+          "startedAtMs",
+          "threadId",
+          "turnId"
+        ],
+        "type": "object"
+      },
       "ThreadApproveGuardianDeniedActionParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -24695,6 +24720,10 @@
             "description": "When true, return only thread metadata and live-resume state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after resuming. Full-history hydration is deprecated for paginated threads; use this with `thread/turns/list` and `thread/items/list` instead.",
             "type": "boolean"
           },
+          "includeActiveItems": {
+            "description": "Include currently running tool items independently of paginated history.",
+            "type": "boolean"
+          },
           "model": {
             "description": "Configuration overrides for the resumed thread, if any.",
             "type": [
@@ -24754,6 +24783,16 @@
       "ThreadResumeResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "activeItems": {
+            "description": "Live activity at the serialized subscription boundary; absent on older servers.",
+            "items": {
+              "$ref": "#/definitions/v2/ThreadActiveItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "approvalPolicy": {
             "$ref": "#/definitions/v2/AskForApproval"
           },

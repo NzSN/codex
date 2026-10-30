@@ -34,6 +34,8 @@ pub(super) struct StatusCopySource {
 #[derive(Default)]
 pub(super) struct TranscriptState {
     pub(super) active_cell: Option<Box<dyn HistoryCell>>,
+    pub(super) active_tools: codex_app_server_protocol::ActiveItems,
+    pub(super) active_tool_rows: Vec<Box<dyn HistoryCell>>,
     /// Shared retained rows for concurrently running dynamic tools, removed on completion.
     pub(super) dynamic_calls:
         std::collections::HashMap<String, crate::history_cell::DynamicToolCallCell>,

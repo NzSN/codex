@@ -212,6 +212,7 @@ pub(super) fn sample_thread_resume_response_with_source(
     parent_thread_id: Option<String>,
 ) -> ClientResponsePayload {
     ClientResponsePayload::ThreadResume(ThreadResumeResponse {
+        active_items: None,
         model_context: None,
         disabled_plugin_ids: Vec::new(),
         thread: sample_thread_with_metadata(

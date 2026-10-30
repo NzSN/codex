@@ -1658,6 +1658,31 @@
       ],
       "type": "string"
     },
+    "ThreadActiveItem": {
+      "description": "A running action captured at the thread resume subscription boundary.",
+      "properties": {
+        "item": {
+          "$ref": "#/definitions/ThreadItem"
+        },
+        "startedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item",
+        "startedAtMs",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
     "ThreadEnvironment": {
       "description": "An environment selected by a loaded thread, independent of connection status.",
       "properties": {
@@ -3208,6 +3233,16 @@
     }
   },
   "properties": {
+    "activeItems": {
+      "description": "Live activity at the serialized subscription boundary; absent on older servers.",
+      "items": {
+        "$ref": "#/definitions/ThreadActiveItem"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
     "approvalPolicy": {
       "$ref": "#/definitions/AskForApproval"
     },

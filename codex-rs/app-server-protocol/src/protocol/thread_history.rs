@@ -246,6 +246,7 @@ impl ThreadHistoryChangeAccumulator {
 }
 
 pub struct ThreadHistoryBuilder {
+    active_items: super::active_items::ActiveItems,
     // Retain the builder representation so late completions can reuse each
     // finished turn's item index without adding it to the public Turn type.
     turns: Vec<PendingTurn>,
@@ -267,6 +268,7 @@ impl ThreadHistoryBuilder {
         Self {
             turns: Vec::new(),
             current_turn: None,
+            active_items: Default::default(),
             next_item_index: 1,
             current_rollout_index: 0,
             next_rollout_index: 0,
@@ -361,7 +363,74 @@ impl ThreadHistoryBuilder {
     ///
     /// This function should handle all EventMsg variants that can be persisted in a rollout file.
     /// See `persisted_rollout_item` in `codex-rs/rollout/src/policy.rs`.
+    pub fn active_items(&self, thread_id: &str) -> Vec<super::v2::ItemStartedNotification> {
+        let mut items = self.active_items.items().to_vec();
+        // Compatibility events may materialize pending tools without an ItemStarted.
+        // Inspect by reference; never clone the active turn's historical payloads.
+        if let Some(turn) = self.current_turn.as_ref() {
+            for item in &turn.items {
+                if super::active_items::is_in_progress_tool(item)
+                    && !items
+                        .iter()
+                        .any(|active| active.turn_id == turn.id && active.item.id() == item.id())
+                {
+                    items.push(super::v2::ItemStartedNotification {
+                        thread_id: thread_id.to_string(),
+                        turn_id: turn.id.clone(),
+                        item: item.clone(),
+                        started_at_ms: turn.started_at.unwrap_or_default() * 1000,
+                    });
+                }
+            }
+        }
+        for item in &mut items {
+            item.thread_id = thread_id.to_string();
+        }
+        items.sort_by_key(|item| item.started_at_ms);
+        items
+    }
+
     pub fn handle_event(&mut self, event: &EventMsg) {
+        match event {
+            EventMsg::TurnStarted(_)
+            | EventMsg::TurnComplete(_)
+            | EventMsg::TurnAborted(_)
+            | EventMsg::ThreadRolledBack(_) => self.active_items = Default::default(),
+            EventMsg::ItemStarted(_)
+            | EventMsg::ItemCompleted(_)
+            | EventMsg::ExecCommandBegin(_)
+            | EventMsg::ExecCommandEnd(_)
+            | EventMsg::CollabWaitingBegin(_)
+            | EventMsg::CollabWaitingEnd(_)
+            | EventMsg::CollabAgentSpawnBegin(_)
+            | EventMsg::CollabAgentSpawnEnd(_)
+            | EventMsg::CollabAgentInteractionBegin(_)
+            | EventMsg::CollabAgentInteractionEnd(_)
+            | EventMsg::CollabCloseBegin(_)
+            | EventMsg::CollabCloseEnd(_)
+            | EventMsg::CollabResumeBegin(_)
+            | EventMsg::CollabResumeEnd(_)
+            | EventMsg::DynamicToolCallResponse(_) => {
+                let turn_id = match event {
+                    EventMsg::ItemStarted(item) => item.turn_id.as_str(),
+                    EventMsg::ItemCompleted(item) => item.turn_id.as_str(),
+                    EventMsg::ExecCommandBegin(item) => item.turn_id.as_str(),
+                    EventMsg::ExecCommandEnd(item) => item.turn_id.as_str(),
+                    _ => self
+                        .current_turn
+                        .as_ref()
+                        .map(|turn| turn.id.as_str())
+                        .unwrap_or_default(),
+                };
+                let notification = super::event_mapping::item_event_to_server_notification(
+                    event.clone(),
+                    "",
+                    turn_id,
+                );
+                self.active_items.note(&notification);
+            }
+            _ => {}
+        }
         match event {
             EventMsg::UserMessage(payload) => self.handle_user_message(payload),
             EventMsg::AgentMessage(payload) => self.handle_agent_message(payload),
