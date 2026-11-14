@@ -194,7 +194,6 @@ async fn restored_context_caches_keep_originator_catalogs_separate_and_warm() {
         let mut model = model_info_from_slug("shared-model");
         model.visibility = codex_protocol::openai_models::ModelVisibility::List;
         model.description = Some(scope.into());
-        model.used_fallback_model_metadata = false;
         model.model_messages = Some(codex_protocol::openai_models::ModelMessages {
             instructions_template: Some(scope.into()),
             ..Default::default()

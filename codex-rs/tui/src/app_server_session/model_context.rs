@@ -7,7 +7,7 @@ use codex_app_server_protocol::ModelContextResolveResponse;
 
 impl AppServerSession {
     pub(crate) fn supports_mixed_model_contexts(&self) -> bool {
-        self.client.mixed_provider_app_server_version() == Some(1)
+        self.mixed_provider_app_server_version == Some(1)
     }
 
     pub(crate) fn clear_pending_model_context(&mut self) {
@@ -42,7 +42,7 @@ impl AppServerSession {
         thread_id: Option<ThreadId>,
         apply_launch_choices: bool,
     ) -> Result<()> {
-        if self.client.mixed_provider_app_server_version() != Some(1) {
+        if self.mixed_provider_app_server_version != Some(1) {
             if apply_launch_choices
                 && self.launch_model_choices.requests_model_context()
                 && !self.uses_embedded_app_server()
@@ -60,7 +60,7 @@ impl AppServerSession {
             StartupLaunchChoices::default()
         };
         let response: ModelContextResolveResponse = self
-            .client
+            .request_handle
             .request_typed(ClientRequest::ModelContextResolve {
                 request_id,
                 params: ModelContextResolveParams {

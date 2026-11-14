@@ -4,12 +4,14 @@ use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use codex_app_server::in_process;
+use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadQueueAddParams;
 use codex_app_server_protocol::ThreadQueueAddResponse;
 use codex_app_server_protocol::ThreadQueueListParams;
@@ -78,17 +80,7 @@ base_url = "{}/v1"
         other.uri(),
     );
     let requirements_path = home.path().join("requirements.toml");
-    if required_selection == "default" {
-        std::fs::write(
-            &requirements_path,
-            requirements.replace("model_provider = \"gateway\"", ""),
-        )?;
-        let path = home.path().join("config.toml");
-        let config = std::fs::read_to_string(&path)?;
-        std::fs::write(path, config.replace("mock_provider", "gateway"))?;
-    } else {
-        std::fs::write(&requirements_path, &requirements)?;
-    }
+    std::fs::write(&requirements_path, &requirements)?;
     let mut server = TestAppServer::builder()
         .with_codex_home(home.path())
         .with_json_logging("warn")
@@ -113,6 +105,7 @@ base_url = "{}/v1"
         .request(|request_id| ClientRequest::ThreadQueueAdd {
             request_id,
             params: ThreadQueueAddParams {
+                responsesapi_client_metadata: None,
                 thread_id: started.thread.id.clone(),
                 input: input.clone(),
                 client_user_message_id: "queued-message".into(),
@@ -148,6 +141,10 @@ base_url = "{}/v1"
     };
     for (method, params) in [
         ("thread/resume", json!({"threadId": started.thread.id})),
+        (
+            "thread/guardianReview",
+            json!({ "threadId": started.thread.id }),
+        ),
         (
             "thread/goal/set",
             json!({"threadId": started.thread.id, "objective": "Blocked objective"}),
@@ -392,6 +389,98 @@ async fn malformed_managed_requirements_reject_input() -> Result<()> {
         .expect_err("cannot admit input without valid managed provider requirements");
     assert_eq!(response.code, -32600);
     assert!(requests.requests().is_empty());
+    client.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn malformed_system_defaults_do_not_block_existing_thread_turn() -> Result<()> {
+    let provider = MockServer::start().await;
+    let home = TempDir::new()?;
+    MockResponsesConfig::new(&provider.uri()).write(home.path())?;
+    let system_config_path = home.path().join("system-config.toml");
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.system_config_path = Some(system_config_path.clone());
+    let config = Arc::new(
+        ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .fallback_cwd(Some(home.path().to_path_buf()))
+            .loader_overrides(overrides.clone())
+            .build()
+            .await?,
+    );
+    let mut client = in_process::start(InProcessStartArgs {
+        arg0_paths: Arg0DispatchPaths::default(),
+        config,
+        cli_overrides: Vec::new(),
+        loader_overrides: overrides,
+        strict_config: false,
+        cloud_config_bundle: CloudConfigBundleLoader::default(),
+        embedded_network_policy: Default::default(),
+        thread_config_loader: Arc::new(NoopThreadConfigLoader),
+        feedback: CodexFeedback::new(),
+        log_db: None,
+        state_db: None,
+        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+        config_warnings: Vec::new(),
+        session_source: SessionSource::Cli,
+        enable_codex_api_key_env: false,
+        initialize: InitializeParams {
+            client_info: ClientInfo {
+                name: "codex-app-server-tests".to_string(),
+                title: None,
+                version: "0.1.0".to_string(),
+            },
+            capabilities: None,
+        },
+        channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+    })
+    .await?;
+    let response = client
+        .request(ClientRequest::ThreadStart {
+            request_id: RequestId::Integer(1),
+            params: ThreadStartParams::default(),
+        })
+        .await?
+        .expect("thread/start should succeed");
+    let started: ThreadStartResponse = serde_json::from_value(response)?;
+
+    let requests = responses::mount_sse_once(
+        &provider,
+        responses::sse(vec![responses::ev_completed("response-1")]),
+    )
+    .await;
+    std::fs::write(system_config_path, "invalid toml !!!")?;
+    let response = client
+        .request(ClientRequest::TurnStart {
+            request_id: RequestId::Integer(2),
+            params: TurnStartParams {
+                thread_id: started.thread.id.clone(),
+                input: vec![UserInput::Text {
+                    text: "Continue on the original provider.".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        })
+        .await?
+        .expect("turn/start should succeed");
+    let _: TurnStartResponse = serde_json::from_value(response)?;
+    timeout(Duration::from_secs(/*secs*/ 60), async {
+        loop {
+            let Some(event) = client.next_event().await else {
+                anyhow::bail!("app-server stopped before turn/completed");
+            };
+            if let InProcessServerEvent::ServerNotification(notification) = event
+                && let ServerNotification::TurnCompleted(completed) = notification.as_ref()
+                && completed.thread_id == started.thread.id
+            {
+                return Ok::<(), anyhow::Error>(());
+            }
+        }
+    })
+    .await??;
+    assert_eq!(requests.requests().len(), 1);
     client.shutdown().await?;
     Ok(())
 }

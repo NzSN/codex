@@ -82,6 +82,7 @@ mod tests {
         assert_eq!(state.items()[0].started_at_ms, 123);
         state.note(&ServerNotification::ItemCompleted(
             ItemCompletedNotification {
+                content_token_count: None,
                 thread_id: "thread".into(),
                 turn_id: "turn".into(),
                 item: first.item,
@@ -106,8 +107,12 @@ mod tests {
 
     #[test]
     fn active_items_builder_snapshot_is_independent_of_history_pages() {
-        use codex_protocol::items::{DynamicToolCallItem, DynamicToolCallStatus, TurnItem};
-        use codex_protocol::protocol::{EventMsg, ItemCompletedEvent, ItemStartedEvent};
+        use codex_protocol::items::DynamicToolCallItem;
+        use codex_protocol::items::DynamicToolCallStatus;
+        use codex_protocol::items::TurnItem;
+        use codex_protocol::protocol::EventMsg;
+        use codex_protocol::protocol::ItemCompletedEvent;
+        use codex_protocol::protocol::ItemStartedEvent;
         let mut builder = crate::ThreadHistoryBuilder::new();
         let thread_id = codex_protocol::ThreadId::new();
         builder.handle_event(&EventMsg::TurnStarted(
@@ -146,6 +151,7 @@ mod tests {
             call.status = DynamicToolCallStatus::Completed;
         }
         builder.handle_event(&EventMsg::ItemCompleted(ItemCompletedEvent {
+            content_token_count: None,
             thread_id,
             turn_id: "turn".into(),
             item,

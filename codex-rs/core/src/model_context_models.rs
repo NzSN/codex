@@ -19,6 +19,10 @@ use tokio::sync::TryLockError;
 pub(super) struct ProviderCatalogModelsManager(pub(super) SharedModelsManager);
 
 impl ModelsManager for ProviderCatalogModelsManager {
+    fn ensure_initialized(&self, factory: HttpClientFactory) -> ModelsManagerFuture<'_, ()> {
+        self.0.ensure_initialized(factory)
+    }
+
     fn for_originator(&self, originator: &str) -> Option<SharedModelsManager> {
         self.0
             .for_originator(originator)
@@ -102,7 +106,7 @@ impl ModelsManager for ProviderCatalogModelsManager {
         &'a self,
         model: &'a str,
         config: &'a ModelsManagerConfig,
-    ) -> ModelsManagerFuture<'a, ModelInfo> {
+    ) -> ModelsManagerFuture<'a, CatalogModel> {
         self.0.get_model_info(model, config)
     }
 

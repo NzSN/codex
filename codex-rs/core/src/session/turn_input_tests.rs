@@ -616,7 +616,7 @@ async fn automatic_admission_rechecks_plan_mode_without_committing_sparse_settin
         .acquire()
         .await
         .expect("acquire MCP refresh gate");
-    session.mcp_refresh.claim();
+    session.mcp_refresh.take_pending();
     assert!(!session.mcp_refresh.is_pending());
 
     for (submission_id, prepared) in [
@@ -734,6 +734,7 @@ async fn admission_revalidates_constraints_before_committing(kind: TurnStartKind
             misalignment: None,
             message: expected_message,
             codex_error_info: Some(CodexErrorInfo::BadRequest),
+            rejected_audio_file_ids: Vec::new(),
         }]
     );
     assert_eq!(session.thread_settings_snapshot().await, desired_settings);
@@ -1237,4 +1238,57 @@ async fn scored_prompt_keeps_its_submission_item_id() {
         .collect::<std::collections::HashSet<_>>();
     assert_eq!(ui_ids.len(), 3);
     session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+}
+
+#[test_case(true, false, true; "encrypted_in_plaintext_mode")]
+#[test_case(false, true, true; "encrypted_for_custom_provider")]
+#[test_case(true, false, false; "oversized_plaintext")]
+#[tokio::test]
+async fn native_agent_followup_enforces_recipient_payload_policy(
+    plaintext_mode: bool,
+    custom_provider: bool,
+    encrypted: bool,
+) {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    {
+        let mut state = session.state.lock().await;
+        let config = Arc::make_mut(&mut state.session_configuration.original_config_do_not_use);
+        config.multi_agent_v2.task_payload = if plaintext_mode {
+            codex_protocol::protocol::MultiAgentTaskPayload::Plaintext
+        } else {
+            codex_protocol::protocol::MultiAgentTaskPayload::Encrypted
+        };
+        if custom_provider {
+            config.model_provider = codex_model_provider_info::create_oss_provider_with_base_url(
+                "http://localhost:11434/v1",
+                codex_model_provider_info::WireApi::Responses,
+            );
+        }
+    }
+    let author = AgentPath::root().join("worker").expect("worker path");
+    let recipient = AgentPath::root();
+    let communication = if encrypted {
+        InterAgentCommunication::new_encrypted(
+            author,
+            recipient,
+            Vec::new(),
+            "ciphertext".into(),
+            true,
+        )
+    } else {
+        InterAgentCommunication::new(author, recipient, Vec::new(), "x".repeat(4097), true)
+    };
+    let error = super::agent::submit(
+        &session,
+        TurnInputRequest::new(SubmittedTurnInput::InterAgentCommunication(communication)).into(),
+        "invalid-followup".into(),
+    )
+    .await
+    .expect_err("invalid payload must be rejected before queue admission");
+    assert!(matches!(
+        error.details(),
+        CodexErrorDetails::InvalidRequest(_)
+    ));
+    assert!(session.active_turn.lock().await.is_none());
+    assert!(!session.input_queue.has_trigger_turn_mailbox_items().await);
 }

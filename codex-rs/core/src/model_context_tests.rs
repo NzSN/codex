@@ -109,7 +109,7 @@ async fn scoped_native_catalog_retains_the_runtime_binding_for_custom_review() -
             .get_model_info("shared-model-name", &bound.to_models_manager_config())
             .await;
         assert_eq!(info.description.as_deref(), Some(scope));
-        assert!(!info.used_fallback_model_metadata);
+        assert!(info.origin != codex_protocol::openai_models::ModelOrigin::Synthetic);
         let catalog = manager
             .model_catalog_with_origins(
                 codex_models_manager::manager::RefreshStrategy::InMemory,
@@ -513,4 +513,76 @@ fn public_tenant_routing_changes_identity_while_host_credential_rotation_does_no
         route_fingerprint("custom", &provider).expect("new tenant"),
         first
     );
+}
+
+#[tokio::test]
+async fn runtime_auth_rebinding_retains_context_catalog_and_originator() -> anyhow::Result<()> {
+    let home = tempfile::tempdir()?;
+    let mut config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(home.path().to_path_buf())
+        .build()
+        .await?;
+    let auth = AuthManager::from_auth_for_testing(codex_login::CodexAuth::from_api_key(
+        "context-test-key",
+    ));
+    let context = ResolvedModelContext::resolve(&config, auth.clone(), None)?
+        .for_originator("codex_work_cca");
+    let other_auth = AuthManager::from_auth_for_testing(codex_login::CodexAuth::from_api_key(
+        "other-context-test-key",
+    ));
+    let other_owner = context.with_provider_auth(codex_model_provider::ProviderAuthContext {
+        credentials: other_auth.clone(),
+        runtime_auth: None,
+    });
+    assert_eq!(context.snapshot, other_owner.snapshot);
+    assert!(Arc::ptr_eq(&other_owner.credentials, &other_auth));
+    assert!(!Arc::ptr_eq(
+        &context.models_manager,
+        &other_owner.models_manager
+    ));
+    assert!(Arc::ptr_eq(
+        &context,
+        &context.with_provider_auth(codex_model_provider::ProviderAuthContext {
+            credentials: auth.clone(),
+            runtime_auth: None,
+        })
+    ));
+    let runtime = codex_runtime_agent_instance::RuntimeAuthManager::for_codex(
+        auth.clone(),
+        &config.chatgpt_base_url,
+        "context-test-installation",
+    );
+    let rebound = context.with_provider_auth(codex_model_provider::ProviderAuthContext {
+        credentials: auth.clone(),
+        runtime_auth: Some((Arc::new(runtime), config.runtime_auth_mode)),
+    });
+    assert_eq!(context.snapshot, rebound.snapshot);
+    assert_eq!(context.catalog_originator, rebound.catalog_originator);
+    assert!(rebound.matches_config(&config));
+    assert!(!Arc::ptr_eq(
+        &context.models_manager,
+        &rebound.models_manager
+    ));
+    config.model_catalog = Some(catalog());
+    config.model = Some("shared-model-name".into());
+    let context = ResolvedModelContext::resolve(&config, auth.clone(), None)?;
+    let runtime = codex_runtime_agent_instance::RuntimeAuthManager::for_codex(
+        auth.clone(),
+        &config.chatgpt_base_url,
+        "context-test-installation",
+    );
+    let rebound = context.with_provider_auth(codex_model_provider::ProviderAuthContext {
+        credentials: auth,
+        runtime_auth: Some((Arc::new(runtime), config.runtime_auth_mode)),
+    });
+    assert_eq!(context.snapshot, rebound.snapshot);
+    let catalog = rebound
+        .models_manager
+        .raw_model_catalog(
+            codex_models_manager::manager::RefreshStrategy::Offline,
+            config.http_client_factory(),
+        )
+        .await;
+    assert_eq!(Some(catalog), config.model_catalog);
+    Ok(())
 }

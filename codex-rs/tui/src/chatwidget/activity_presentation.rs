@@ -5,6 +5,7 @@ use super::*;
 use crate::transcript_view::ActivityTranscriptLines;
 
 impl ChatWidget {
+    #[cfg(test)]
     pub(crate) fn active_activity_ids(&self) -> Vec<String> {
         let mut ids = self
             .transcript
@@ -29,6 +30,10 @@ impl ChatWidget {
         ids
     }
 
+    pub(crate) fn active_activity_cell(&self) -> Option<&dyn HistoryCell> {
+        self.transcript.active_cell.as_deref()
+    }
+
     /// Render only the chosen activity presentation, before any auxiliary live text.
     pub(crate) fn active_cell_owned_transcript_lines(
         &self,
@@ -37,36 +42,19 @@ impl ChatWidget {
     ) -> Option<ActivityTranscriptLines> {
         let active = self.transcript.active_cell.as_deref();
         let mode = self.history_render_mode();
-        let render_compact = |cell: &dyn HistoryCell, width| {
-            if cell.as_any().is::<history_cell::SessionInfoCell>() {
-                history_cell::fullscreen_session_lines(cell, width, /*detailed*/ false, mode)
-            } else if mode == HistoryRenderMode::Raw {
-                cell.display_hyperlink_lines_for_mode(width, mode)
-            } else {
-                cell.compact_hyperlink_lines(width)
-            }
-        };
         let has_activity = mode == HistoryRenderMode::Rich
             && active.is_some_and(|cell| !cell.activity_ids().is_empty());
         let activity = active.map_or_else(Vec::new, |cell| {
             if expanded && has_activity {
                 cell.expanded_hyperlink_lines(width)
             } else {
-                render_compact(cell, width)
+                history_cell::fullscreen_session_lines(cell, width, /*detailed*/ false, mode)
             }
         });
         let disclosure = active
             .filter(|_| has_activity)
             .and_then(|cell| cell.activity_disclosure(width));
-        let mut auxiliary = self
-            .active_cell_hyperlink_lines_with(width, |cell, width| {
-                if active.is_some_and(|active| std::ptr::eq(active, cell)) {
-                    Vec::new()
-                } else {
-                    render_compact(cell, width)
-                }
-            })
-            .unwrap_or_default();
+        let mut auxiliary = self.active_auxiliary_lines(width);
         if activity.is_empty() && auxiliary.is_empty() {
             return None;
         }
@@ -78,5 +66,17 @@ impl ChatWidget {
             auxiliary,
             disclosure,
         })
+    }
+    pub(crate) fn active_auxiliary_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let active = self.active_activity_cell();
+        let mode = self.history_render_mode();
+        self.active_cell_hyperlink_lines_with(width, |cell, width| {
+            if active.is_some_and(|active| std::ptr::eq(active, cell)) {
+                Vec::new()
+            } else {
+                history_cell::fullscreen_session_lines(cell, width, /*detailed*/ false, mode)
+            }
+        })
+        .unwrap_or_default()
     }
 }

@@ -192,23 +192,48 @@ impl CatalogRequestProcessor {
             .await?
         {
             Some(config) => {
+                if params
+                    .model_provider
+                    .as_deref()
+                    .is_some_and(|provider| provider != config.model_provider_id)
+                {
+                    return Err(invalid_params(
+                        "modelProvider conflicts with the selected model context",
+                    ));
+                }
                 let manager = config
                     .resolved_model_context
                     .as_ref()
                     .map(|context| context.models_manager.clone())
-                    .unwrap_or_else(|| {
-                        codex_core::build_models_manager(
-                            &config,
-                            self.thread_manager.auth_manager(),
-                        )
-                    });
+                    .unwrap_or_else(|| self.thread_manager.models_manager_for_config(&config));
                 (config, manager)
             }
-            None => self
-                .model_catalog
-                .current()
-                .await
-                .map_err(|error| config_load_error(&error))?,
+            None => {
+                let (active_config, active_models_manager) = self
+                    .model_catalog
+                    .current()
+                    .await
+                    .map_err(|err| config_load_error(&err))?;
+                let (config, models_manager) = match params.model_provider.as_deref() {
+                    None => (active_config, active_models_manager),
+                    Some(provider_id) => {
+                        let config = config_for_provider(&self.config, provider_id)?;
+                        if provider_id == active_config.model_provider_id
+                            && config.model_provider == active_config.model_provider
+                        {
+                            (active_config, active_models_manager)
+                        } else {
+                            // Temporary catalogs must not replace the active provider's disk cache.
+                            let manager = self.thread_manager.temporary_models_manager_for_config(
+                                &config,
+                                &codex_models_manager::manager::ModelCatalogSettings::default(),
+                            );
+                            (config, manager)
+                        }
+                    }
+                };
+                (config, models_manager)
+            }
         };
         // Gate the same provider used by the catalog, including when its model cache is warm.
         // Resolving credentials may refresh them, but explicit host policy prevents browser login.
@@ -224,23 +249,23 @@ impl CatalogRequestProcessor {
                 .check_thread_model_provider(&config)
                 .await
                 .map_err(|err| config_load_error(&err))?;
-            if gateway.resolve_access_token().await.is_err() {
+            if let Err(error) = gateway.resolve_access_token().await {
                 let current = self
                     .config_manager
                     .load_latest_config(/*fallback_cwd*/ None)
                     .await
                     .map_err(|err| config_load_error(&err))?;
-                // Configuration edits without an account transition still require a restart to refresh the model catalog.
-                if current.model_provider_id != config.model_provider_id
-                    || current.model_provider != config.model_provider
+                // An explicit selection need not match the current default.
+                if current.model_providers.get(&config.model_provider_id)
+                    != Some(&config.model_provider)
+                    || (params.model_provider.is_none()
+                        && current.model_provider_id != config.model_provider_id)
                 {
                     return Err(invalid_request(
                         "Model provider settings changed. Restart Codex to apply them, then retry fetching the model list",
                     ));
                 }
-                return Err(invalid_request(
-                    "Gateway sign-in required or unavailable. Complete gateway sign-in and retry fetching the model list",
-                ));
+                return Err(invalid_request(error.to_string()));
             }
         }
         self.list_models(params, config, models_manager)
@@ -343,6 +368,7 @@ impl CatalogRequestProcessor {
             include_hidden,
             model_context_id: _,
             thread_id: _,
+            model_provider: _,
         } = params;
         let presets = self
             .model_catalog
@@ -647,6 +673,14 @@ impl CatalogRequestProcessor {
                         config.config_layer_stack,
                     )
                     .with_plugin_skill_snapshots(plugin_skill_snapshots);
+                    let skills_input = match self
+                        .thread_manager
+                        .environment_manager()
+                        .default_environment_id()
+                    {
+                        Some(environment_id) => skills_input.with_environment_id(environment_id),
+                        None => skills_input,
+                    };
                     let snapshot = skills_request
                         .snapshot_for_cwd(&skills_input, force_reload, fs)
                         .await;

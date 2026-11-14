@@ -53,6 +53,7 @@ fn router_with_collaboration_message_tool(
         Vec::new(),
         ToolMode::Direct,
         BTreeMap::new(),
+        /*exec_definitions*/ None,
         /*tool_namespaces_info*/ None,
         &[],
         super::CollaborationMessagePolicy {
@@ -63,6 +64,57 @@ fn router_with_collaboration_message_tool(
 }
 
 struct ExtensionEchoContributor;
+
+#[tokio::test]
+async fn build_tool_call_retains_native_evidence_only_for_reviewed_mav2_tools() {
+    for review_enabled in [false, true] {
+        for namespace in [None, Some("team")] {
+            let (_, mut turn) = make_session_and_context().await;
+            turn.multi_agent_version = codex_protocol::protocol::MultiAgentVersion::V2;
+            let config = Arc::make_mut(&mut turn.config);
+            config.multi_agent_v2.tool_namespace = namespace.map(str::to_owned);
+            if review_enabled {
+                config
+                    .features
+                    .enable(codex_features::Feature::GuardianNativeMultiAgentHistory)
+                    .unwrap();
+            } else {
+                config
+                    .features
+                    .disable(codex_features::Feature::GuardianNativeMultiAgentHistory)
+                    .unwrap();
+            }
+            let step = StepContext::for_test(Arc::new(turn));
+            let router = test_tool_router(&step, Vec::new(), Vec::new(), &[]);
+            for (name, mutating) in [
+                ("spawn_agent", true),
+                ("send_message", true),
+                ("followup_task", true),
+                ("interrupt_agent", true),
+                ("list_agents", false),
+                ("wait_agent", false),
+            ] {
+                let item: ResponseItem = serde_json::from_value(json!({
+                    "type": "function_call",
+                    "id": "fc_review",
+                    "call_id": "call-review",
+                    "namespace": namespace,
+                    "name": name,
+                    "arguments": r#"{"message":"opaque-message"}"#,
+                    "encrypted_content": "opaque-replay",
+                    "encrypted_function_args": ["message"],
+                }))
+                .unwrap();
+                let call = router.build_tool_call(item.clone()).unwrap().unwrap();
+                assert_eq!(
+                    call.native_call.as_deref(),
+                    (review_enabled && mutating).then_some(&item),
+                    "{name}, namespace={namespace:?}, review_enabled={review_enabled}",
+                );
+            }
+        }
+    }
+}
 
 #[test]
 fn tool_log_payload_redacts_plaintext_multi_agent_messages() {
@@ -86,6 +138,7 @@ fn plaintext_collaboration_accepts_absent_and_empty_encryption_metadata() {
         router_with_collaboration_message_tool(tool_name.clone(), MultiAgentTaskPayload::Plaintext);
     for encrypted_function_args in [None, Some(Vec::new())] {
         let call = ToolCall {
+            native_call: None,
             tool_name: tool_name.clone(),
             call_id: "call".to_string(),
             payload: ToolPayload::Function {
@@ -112,6 +165,7 @@ fn plaintext_collaboration_rejects_explicit_message_encryption() {
     let router =
         router_with_collaboration_message_tool(tool_name.clone(), MultiAgentTaskPayload::Plaintext);
     let call = ToolCall {
+        native_call: None,
         tool_name,
         call_id: "call".to_string(),
         payload: ToolPayload::Function {
@@ -139,6 +193,7 @@ fn encrypted_collaboration_preserves_legacy_metadata_classification() {
     let router =
         router_with_collaboration_message_tool(tool_name.clone(), MultiAgentTaskPayload::Encrypted);
     let call = |encrypted_function_args| ToolCall {
+        native_call: None,
         tool_name: tool_name.clone(),
         call_id: "call".to_string(),
         payload: ToolPayload::Function {
@@ -167,6 +222,7 @@ fn plaintext_collaboration_preserves_code_mode_origin() {
     let router =
         router_with_collaboration_message_tool(tool_name.clone(), MultiAgentTaskPayload::Plaintext);
     let call = ToolCall {
+        native_call: None,
         tool_name,
         call_id: "call".to_string(),
         payload: ToolPayload::Function {
@@ -200,6 +256,7 @@ fn plaintext_mode_redacts_outer_code_mode_wrapper_without_changing_payload() {
             Vec::new(),
             ToolMode::CodeModeOnly,
             BTreeMap::new(),
+            /*exec_definitions*/ None,
             /*tool_namespaces_info*/ None,
             &[],
             super::CollaborationMessagePolicy {
@@ -210,6 +267,7 @@ fn plaintext_mode_redacts_outer_code_mode_wrapper_without_changing_payload() {
     };
     let sentinel = "await tools.collaboration_plaintext.send_message({message: 'secret-task'})";
     let call = ToolCall {
+        native_call: None,
         tool_name: ToolName::namespaced(
             DEFAULT_FUNCTION_NAMESPACE,
             codex_code_mode::PUBLIC_TOOL_NAME,
@@ -373,6 +431,7 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
                     arguments: "{}".to_string(),
                 },
                 encrypted_function_args: None,
+                native_call: None,
             })
         })
         .expect("test session should expose a parallel shell-like tool");
@@ -391,6 +450,7 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
             arguments: "{}".to_string(),
         },
         encrypted_function_args: None,
+        native_call: None,
     }));
 
     Ok(())
@@ -398,9 +458,11 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
 
 #[tokio::test]
 async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()> {
+    let (_, turn) = make_session_and_context().await;
+    let step = StepContext::for_test(Arc::new(turn));
     let tool_name = "create_event".to_string();
 
-    let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+    let call_item = ResponseItem::FunctionCall {
         status: None,
         encrypted_content: None,
         id: None,
@@ -410,8 +472,11 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
         encrypted_function_args: Some(Vec::new()),
         call_id: "call-namespace".to_string(),
         internal_chat_message_metadata_passthrough: None,
-    })?
-    .expect("function_call should produce a tool call");
+    };
+    let call = step
+        .tool_router
+        .build_tool_call(call_item)?
+        .expect("function_call should produce a tool call");
 
     assert_eq!(
         call.tool_name,
@@ -432,9 +497,11 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
 
 #[tokio::test]
 async fn build_custom_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()> {
+    let (_, turn) = make_session_and_context().await;
+    let step = StepContext::for_test(Arc::new(turn));
     let tool_name = "exec".to_string();
 
-    let call = ToolRouter::build_tool_call(ResponseItem::CustomToolCall {
+    let call_item = ResponseItem::CustomToolCall {
         encrypted_content: None,
         id: None,
         status: None,
@@ -443,8 +510,11 @@ async fn build_custom_tool_call_uses_namespace_for_registry_name() -> anyhow::Re
         namespace: Some("mcp__python".to_string()),
         input: "print('hello')".to_string(),
         internal_chat_message_metadata_passthrough: None,
-    })?
-    .expect("custom_tool_call should produce a tool call");
+    };
+    let call = step
+        .tool_router
+        .build_tool_call(call_item)?
+        .expect("custom_tool_call should produce a tool call");
 
     assert_eq!(
         call,
@@ -455,16 +525,19 @@ async fn build_custom_tool_call_uses_namespace_for_registry_name() -> anyhow::Re
                 input: "print('hello')".to_string(),
             },
             encrypted_function_args: None,
+            native_call: None,
         }
     );
 
     Ok(())
 }
 
-#[test]
-fn build_tool_call_normalizes_default_function_and_custom_namespaces() -> anyhow::Result<()> {
+#[tokio::test]
+async fn build_tool_call_normalizes_default_function_and_custom_namespaces() -> anyhow::Result<()> {
+    let (_, turn) = make_session_and_context().await;
+    let step = StepContext::for_test(Arc::new(turn));
     for namespace in [None, Some(""), Some(DEFAULT_FUNCTION_NAMESPACE)] {
-        let function_call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+        let function_call_item = ResponseItem::FunctionCall {
             status: None,
             encrypted_content: None,
             id: None,
@@ -474,9 +547,12 @@ fn build_tool_call_normalizes_default_function_and_custom_namespaces() -> anyhow
             encrypted_function_args: None,
             call_id: "call-function".to_string(),
             internal_chat_message_metadata_passthrough: None,
-        })?
-        .expect("function_call should produce a tool call");
-        let custom_call = ToolRouter::build_tool_call(ResponseItem::CustomToolCall {
+        };
+        let function_call = step
+            .tool_router
+            .build_tool_call(function_call_item)?
+            .expect("function_call should produce a tool call");
+        let custom_call_item = ResponseItem::CustomToolCall {
             encrypted_content: None,
             id: None,
             status: None,
@@ -485,8 +561,11 @@ fn build_tool_call_normalizes_default_function_and_custom_namespaces() -> anyhow
             namespace: namespace.map(str::to_string),
             input: "patch".to_string(),
             internal_chat_message_metadata_passthrough: None,
-        })?
-        .expect("custom_tool_call should produce a tool call");
+        };
+        let custom_call = step
+            .tool_router
+            .build_tool_call(custom_call_item)?
+            .expect("custom_tool_call should produce a tool call");
 
         assert_eq!(
             [function_call.tool_name, custom_call.tool_name],
@@ -553,6 +632,7 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
             arguments: "{}".to_string(),
         },
         encrypted_function_args: None,
+        native_call: None,
     };
     assert!(router.tool_supports_parallel(&call));
     assert_eq!(
@@ -569,6 +649,7 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
             arguments: "{}".to_string(),
         },
         encrypted_function_args: None,
+        native_call: None,
     };
     assert!(!router.tool_supports_parallel(&different_server_call));
     assert_eq!(
@@ -585,6 +666,7 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
             arguments: "{}".to_string(),
         },
         encrypted_function_args: None,
+        native_call: None,
     };
     assert!(!router.tool_supports_parallel(&hidden_call));
     assert!(router.registered_tool(&hidden_call.tool_name).is_some());
@@ -596,6 +678,7 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
             arguments: "{}".to_string(),
         },
         encrypted_function_args: None,
+        native_call: None,
     };
     assert!(router.tool_supports_parallel(&nested_only_call));
 
@@ -621,6 +704,7 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
             arguments: "{}".to_string(),
         },
         encrypted_function_args: None,
+        native_call: None,
     }));
 
     Ok(())
@@ -718,6 +802,7 @@ fn mcp_runtime(tool_info: codex_mcp::ToolInfo) -> RegisteredTool {
         as Arc<dyn CoreToolRuntime>;
     RegisteredTool {
         exposure: runtime.exposure(),
+        native_review: Default::default(),
         runtime,
         model_spec: None,
     }
@@ -777,7 +862,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         "expected extension-provided tool to be visible to the model"
     );
 
-    let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+    let call_item = ResponseItem::FunctionCall {
         status: None,
         encrypted_content: None,
         id: None,
@@ -787,8 +872,10 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         call_id: "call-extension".to_string(),
         encrypted_function_args: None,
         internal_chat_message_metadata_passthrough: None,
-    })?
-    .expect("function_call should produce a tool call");
+    };
+    let call = router
+        .build_tool_call(call_item)?
+        .expect("function_call should produce a tool call");
     let result = router
         .dispatch_tool_call_with_code_mode_result(
             Arc::new(session),

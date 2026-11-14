@@ -202,6 +202,8 @@ requires_openai_auth = false
         .request(|request_id| ClientRequest::ModelList {
             request_id,
             params: ModelListParams {
+                thread_id: None,
+                model_provider: None,
                 model_context_id: Some(context_b.model_context_id.clone()),
                 ..Default::default()
             },
@@ -209,6 +211,32 @@ requires_openai_auth = false
         .await?;
     assert_eq!(list.data.len(), 1);
     assert_eq!(list.data[0].model, "same-model");
+    // The additive provider selector cannot redirect an owned catalog context.
+    let request = server
+        .send_request(
+            "model/list",
+            Some(serde_json::json!({
+                "modelContextId": context_b.model_context_id,
+                "modelProvider": "first",
+            })),
+        )
+        .await?;
+    let error = server
+        .read_stream_until_error_message(codex_app_server_protocol::RequestId::Integer(request))
+        .await?;
+    assert_eq!(error.error.code, -32602);
+    let list: ModelListResponse = server
+        .request(|request_id| ClientRequest::ModelList {
+            request_id,
+            params: ModelListParams {
+                model_context_id: Some(context_b.model_context_id.clone()),
+                model_provider: Some("second".into()),
+                ..Default::default()
+            },
+        })
+        .await?;
+    assert_eq!(list.data[0].model, "same-model");
+
     let thread_a = server
         .start_thread(ThreadStartParams {
             model_context_id: Some(context_a.model_context_id),
@@ -462,6 +490,8 @@ async fn assert_context_model(
         .request(|request_id| ClientRequest::ModelList {
             request_id,
             params: ModelListParams {
+                thread_id: None,
+                model_provider: None,
                 model_context_id: Some(context.model_context_id.clone()),
                 ..Default::default()
             },
@@ -675,8 +705,12 @@ async fn native_navigation_contexts_inherit_loaded_and_persisted_work_originator
 
 #[tokio::test]
 async fn native_provider_catalogs_are_scoped_and_reject_unknown_models() -> Result<()> {
-    use wiremock::matchers::{header, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
     let endpoint = MockServer::start().await;
     let home = TempDir::new()?;
     let file = home.path().join("fixture.json");
@@ -828,6 +862,8 @@ wire_api = "responses"
         .request(|request_id| ClientRequest::ModelList {
             request_id,
             params: ModelListParams {
+                thread_id: None,
+                model_provider: None,
                 model_context_id: Some(discovery_context.model_context_id.clone()),
                 ..Default::default()
             },

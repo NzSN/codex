@@ -33,11 +33,13 @@ region = "us-west-2"
         .request(|request_id| ClientRequest::ModelList {
             request_id,
             params: ModelListParams {
+                model_provider: None,
                 model_context_id: None,
                 thread_id: None,
                 cursor: None,
                 limit: Some(100),
                 include_hidden: Some(true),
+                ..Default::default()
             },
         })
         .await?;
@@ -117,11 +119,13 @@ region = "us-west-2"
         .request(|request_id| ClientRequest::ModelList {
             request_id,
             params: ModelListParams {
+                model_provider: None,
                 model_context_id: None,
                 thread_id: None,
                 cursor: None,
                 limit: Some(100),
                 include_hidden: Some(true),
+                ..Default::default()
             },
         })
         .await?;

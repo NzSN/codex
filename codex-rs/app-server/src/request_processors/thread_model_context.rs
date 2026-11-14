@@ -249,7 +249,17 @@ impl ThreadRequestProcessor {
         let originator =
             resolve_thread_originator(params.service_name.as_deref(), saved_originator, None);
         if let Some(context) = &config.resolved_model_context {
-            config.resolved_model_context = Some(context.for_originator(&originator));
+            config.resolved_model_context = Some(
+                context
+                    .with_provider_auth(codex_model_provider::ProviderAuthContext {
+                        credentials: self.auth_manager.clone(),
+                        runtime_auth: self
+                            .thread_manager
+                            .runtime_auth_for_config(&config)
+                            .map_err(|error| internal_error(error.to_string()))?,
+                    })
+                    .for_originator(&originator),
+            );
         }
         let context = config.resolved_model_context.as_ref().ok_or_else(|| {
             context_error(

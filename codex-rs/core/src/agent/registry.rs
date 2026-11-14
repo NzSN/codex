@@ -1,4 +1,5 @@
 use crate::agent::types::AgentMetadata;
+use crate::config::Config;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use codex_model_provider_info::AgentMessageRepresentation;
 use codex_protocol::AgentPath;
@@ -40,9 +41,11 @@ struct ActiveAgents {
     nickname_reset_count: usize,
 }
 
-/// Thread defaults and executor bindings retained while a child's runtime is unloaded.
+/// Effective configuration and executor bindings retained while a child's runtime is unloaded.
 #[derive(Clone)]
 pub(crate) struct EvictedEnvironments {
+    pub(crate) config: Arc<Config>,
+    pub(crate) has_independent_service_tier: bool,
     pub(crate) selections: Vec<TurnEnvironmentSelection>,
     pub(crate) bindings: TurnEnvironmentSnapshot,
 }

@@ -115,9 +115,7 @@ async fn provider_requirements_do_not_reload_thread_config() -> Result<()> {
             .is_err()
     );
     manager.check_thread_model_provider(&current).await?;
-    manager
-        .check_thread_model_provider_for_input(&current)
-        .await?;
+    manager.check_thread_model_provider(&current).await?;
     manager.cloud_config_bundle = Arc::new(RwLock::new(
         CloudConfigBundleFixture::loader_with_enterprise_requirement("model_provider = 'retained'"),
     ));
@@ -306,14 +304,56 @@ name = "Gateway"
         .load_latest_config(Some(home.path().to_path_buf()))
         .await?;
     assert_eq!(current.model_provider_id, "gateway");
-    manager
-        .check_thread_model_provider_for_input(&current)
-        .await?;
+    manager.check_thread_model_provider(&current).await?;
     let default_manager =
         ConfigManager::without_managed_config_for_tests(home.path().to_path_buf());
     default_manager
-        .check_thread_model_provider_for_input(&current)
+        .check_thread_model_provider(&current)
         .await?;
     assert_eq!(current.model_provider_id, "gateway");
+    Ok(())
+}
+
+#[test_case(false, false; "saved_provider_without_explicit_selection")]
+#[test_case(true, false; "typed_explicit_replacement")]
+#[test_case(false, true; "config_explicit_replacement")]
+#[tokio::test]
+async fn resume_provider_selection_preserves_explicit_replacement(
+    typed: bool,
+    config_override: bool,
+) -> Result<()> {
+    let home = tempdir()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        r#"
+model_provider = "openai"
+[model_providers.saved]
+name = "Saved provider"
+[model_providers.replacement]
+name = "Replacement provider"
+"#,
+    )?;
+    let manager = ConfigManager::without_managed_config_for_tests(home.path().to_path_buf());
+    let overrides = config_override
+        .then(|| HashMap::from([("model_provider".into(), serde_json::json!("replacement"))]));
+    let config = manager
+        .load_for_resume(
+            Some("saved"),
+            overrides,
+            ConfigOverrides {
+                model_provider: typed.then(|| "replacement".into()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await?;
+    assert_eq!(
+        config.model_provider_id,
+        if typed || config_override {
+            "replacement"
+        } else {
+            "saved"
+        }
+    );
     Ok(())
 }

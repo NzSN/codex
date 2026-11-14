@@ -83,6 +83,7 @@ mod tests {
     fn redacts_mcp_success_result_and_removes_image_generation() {
         let mut thread = test_thread(vec![
             ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: "agent-1".to_string(),
                 text: "kept".to_string(),
                 phase: None,
@@ -143,6 +144,7 @@ mod tests {
         assert_eq!(
             thread.turns[0].items[0].payload,
             ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: "agent-1".to_string(),
                 text: "kept".to_string(),
                 phase: None,
@@ -229,6 +231,7 @@ mod tests {
             extra: None,
             session_id: "session-1".to_string(),
             forked_from_id: None,
+            attached_to_thread_id: None,
             parent_thread_id: None,
             preview: "preview".to_string(),
             ephemeral: false,

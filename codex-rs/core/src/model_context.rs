@@ -31,6 +31,7 @@ pub struct ResolvedModelContext {
     pub models_manager: SharedModelsManager,
     unscoped_models_manager: SharedModelsManager,
     catalog_originator: Option<ModelCatalogOriginator>,
+    credentials: Arc<AuthManager>,
     provider: ModelProviderInfo,
     api_key_model_discovery: bool,
 }
@@ -328,7 +329,7 @@ impl ResolvedModelContext {
                 "saved model catalog digest does not match its snapshot",
             ));
         }
-        let provider = create_model_provider(config.model_provider.clone(), Some(auth));
+        let provider = create_model_provider(config.model_provider.clone(), Some(auth.clone()));
         // Pending/independent contexts must not overwrite the default disk cache.
         let manager = provider.models_manager_for_context(snapshot.catalog.clone());
         let manager: SharedModelsManager = if config.model_provider.requires_openai_auth {
@@ -343,9 +344,42 @@ impl ResolvedModelContext {
             unscoped_models_manager: manager.clone(),
             models_manager: manager,
             catalog_originator: None,
+            credentials: auth,
             provider: config.model_provider.clone(),
             api_key_model_discovery,
         }))
+    }
+
+    /// Bind discovery to the same runtime credential owner used by inference.
+    /// Retain the context cache and originator partition rather than using the host disk cache.
+    pub fn with_provider_auth(
+        self: &Arc<Self>,
+        auth: codex_model_provider::ProviderAuthContext,
+    ) -> Arc<Self> {
+        if auth.runtime_auth.is_none() && Arc::ptr_eq(&self.credentials, &auth.credentials) {
+            return self.clone();
+        }
+        let provider = auth.model_provider(self.provider.clone());
+        let manager = provider.models_manager_for_context(self.snapshot.catalog.clone());
+        let manager: SharedModelsManager = if self.provider.requires_openai_auth {
+            manager
+        } else {
+            Arc::new(model_context_models::ProviderCatalogModelsManager(manager))
+        };
+        manager.set_api_key_model_discovery_enabled(self.api_key_model_discovery);
+        let context = Arc::new(Self {
+            snapshot: self.snapshot.clone(),
+            unscoped_models_manager: manager.clone(),
+            models_manager: manager,
+            catalog_originator: None,
+            credentials: auth.credentials,
+            provider: self.provider.clone(),
+            api_key_model_discovery: self.api_key_model_discovery,
+        });
+        match self.catalog_originator {
+            Some(originator) => context.for_originator(originator.as_str()),
+            None => context,
+        }
     }
 
     /// Keep the thread's authoritative binding and runtime manager aligned while
@@ -369,6 +403,7 @@ impl ResolvedModelContext {
             models_manager,
             unscoped_models_manager: self.unscoped_models_manager.clone(),
             catalog_originator,
+            credentials: self.credentials.clone(),
             provider: self.provider.clone(),
             api_key_model_discovery: self.api_key_model_discovery,
         })
