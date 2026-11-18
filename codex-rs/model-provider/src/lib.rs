@@ -59,6 +59,7 @@ pub use provider::ProviderUnauthorizedRecovery;
 pub use provider::SharedModelProvider;
 pub use provider::approval_review_uses_parent_model;
 pub use provider::create_model_provider;
+pub use provider::create_model_provider_from_local_config;
 pub use provider::provider_uses_first_party_auth_path;
 pub use provider::resolve_api_provider;
 pub use provider::supports_guardian_async_classifier;
