@@ -94,6 +94,7 @@ mod tests {
             ThreadItemPayload::McpToolCall {
                 id: "mcp-1".to_string(),
                 server: "docs".to_string(),
+                environment_id: None,
                 tool: "lookup".to_string(),
                 status: McpToolCallStatus::Completed,
                 arguments: serde_json::json!({"secret":"argument"}),
@@ -158,6 +159,7 @@ mod tests {
             ThreadItemPayload::McpToolCall {
                 id: "mcp-1".to_string(),
                 server: "docs".to_string(),
+                environment_id: None,
                 tool: "lookup".to_string(),
                 status: McpToolCallStatus::Completed,
                 arguments: JsonValue::String(REDACTED_PAYLOAD.to_string()),
@@ -184,6 +186,7 @@ mod tests {
         let mut thread = test_thread(vec![ThreadItemPayload::McpToolCall {
             id: "mcp-1".to_string(),
             server: "docs".to_string(),
+            environment_id: None,
             tool: "lookup".to_string(),
             status: McpToolCallStatus::Failed,
             arguments: serde_json::json!({"secret":"argument"}),
@@ -206,6 +209,7 @@ mod tests {
             ThreadItemPayload::McpToolCall {
                 id: "mcp-1".to_string(),
                 server: "docs".to_string(),
+                environment_id: None,
                 tool: "lookup".to_string(),
                 status: McpToolCallStatus::Failed,
                 arguments: JsonValue::String(REDACTED_PAYLOAD.to_string()),

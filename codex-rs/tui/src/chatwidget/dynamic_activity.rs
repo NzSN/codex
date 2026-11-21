@@ -66,7 +66,7 @@ impl ChatWidget {
     }
 
     pub(super) fn refresh_active_tool_rows(&mut self) {
-        if self.external_writer_view {
+        if self.is_external_writer_view() {
             self.transcript.active_tool_rows.clear();
             return;
         }
@@ -103,6 +103,7 @@ impl ChatWidget {
                     ThreadItemPayload::McpToolCall {
                         id,
                         server,
+                        environment_id,
                         tool,
                         arguments,
                         ..
@@ -111,6 +112,7 @@ impl ChatWidget {
                             id.clone(),
                             history_cell::McpInvocation {
                                 server: server.clone(),
+                                environment_id: environment_id.clone(),
                                 tool: tool.clone(),
                                 arguments: Some(arguments.clone()),
                             },

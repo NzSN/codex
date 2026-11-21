@@ -1037,6 +1037,7 @@ impl ThreadHistoryBuilder {
         let item = ThreadItemPayload::McpToolCall {
             id: payload.call_id.clone(),
             server: payload.invocation.server.clone(),
+            environment_id: payload.invocation.environment_id.clone(),
             tool: payload.invocation.tool.clone(),
             status: McpToolCallStatus::InProgress,
             arguments: payload
@@ -1095,6 +1096,7 @@ impl ThreadHistoryBuilder {
         let item = ThreadItemPayload::McpToolCall {
             id: payload.call_id.clone(),
             server: payload.invocation.server.clone(),
+            environment_id: payload.invocation.environment_id.clone(),
             tool: payload.invocation.tool.clone(),
             status,
             arguments: payload
@@ -1501,12 +1503,7 @@ impl ThreadHistoryBuilder {
         let tracking_changes = self.is_tracking_changes();
         let changed_turn = if let Some(turn) = self.current_turn.as_mut() {
             turn.status = TurnStatus::Failed;
-            turn.error = Some(V2TurnError {
-                misalignment: payload.misalignment.clone().map(Into::into),
-                message: payload.message.clone(),
-                codex_error_info: payload.codex_error_info.clone().map(Into::into),
-                additional_details: None,
-            });
+            turn.error = Some(V2TurnError::from(payload.clone()));
             tracking_changes.then(|| ThreadHistoryTurnMetadata::from_pending_turn(turn))
         } else {
             None
@@ -1517,12 +1514,7 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_turn_aborted(&mut self, payload: &TurnAbortedEvent) {
-        let terminal_error = payload.error.as_ref().map(|error| V2TurnError {
-            message: error.message.clone(),
-            codex_error_info: error.codex_error_info.clone().map(Into::into),
-            misalignment: error.misalignment.clone().map(Into::into),
-            additional_details: None,
-        });
+        let terminal_error = payload.error.clone().map(V2TurnError::from);
         let apply_abort = |turn: &mut PendingTurn| {
             turn.status = TurnStatus::Interrupted;
             if let Some(error) = terminal_error.as_ref() {
@@ -1571,12 +1563,7 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_turn_complete(&mut self, payload: &TurnCompleteEvent) {
-        let terminal_error = payload.error.as_ref().map(|error| V2TurnError {
-            misalignment: error.misalignment.clone().map(Into::into),
-            message: error.message.clone(),
-            codex_error_info: error.codex_error_info.clone().map(Into::into),
-            additional_details: None,
-        });
+        let terminal_error = payload.error.clone().map(V2TurnError::from);
         let apply_completion = |turn: &mut PendingTurn| {
             if let Some(error) = terminal_error.as_ref() {
                 turn.status = TurnStatus::Failed;
@@ -3666,6 +3653,7 @@ mod tests {
                 call_id: "mcp-1".into(),
                 invocation: McpInvocation {
                     server: "docs".into(),
+                    environment_id: None,
                     tool: "lookup".into(),
                     arguments: Some(serde_json::json!({"id":"123"})),
                 },
@@ -3731,6 +3719,7 @@ mod tests {
             ThreadItemPayload::McpToolCall {
                 id: "mcp-1".into(),
                 server: "docs".into(),
+                environment_id: None,
                 tool: "lookup".into(),
                 status: McpToolCallStatus::Failed,
                 arguments: serde_json::json!({"id":"123"}),
@@ -3765,6 +3754,7 @@ mod tests {
                 call_id: "mcp-1".into(),
                 invocation: McpInvocation {
                     server: "docs".into(),
+                    environment_id: None,
                     tool: "lookup".into(),
                     arguments: Some(serde_json::json!({"id":"123"})),
                 },
@@ -3802,6 +3792,7 @@ mod tests {
             ThreadItemPayload::McpToolCall {
                 id: "mcp-1".into(),
                 server: "docs".into(),
+                environment_id: None,
                 tool: "lookup".into(),
                 status: McpToolCallStatus::Completed,
                 arguments: serde_json::json!({"id":"123"}),
@@ -4211,6 +4202,7 @@ mod tests {
             item: CoreTurnItem::McpToolCall(McpToolCallItem {
                 id: "mcp-1".into(),
                 server: "slack".into(),
+                environment_id: None,
                 tool: "search".into(),
                 arguments: serde_json::json!({"query": "incident"}),
                 connector_id: None,

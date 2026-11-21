@@ -11,6 +11,7 @@ use codex_config::loader::load_managed_requirements_state;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::McpLaunchCwds;
 use codex_exec_server::LOCAL_FS;
 use codex_features::feature_for_key;
 use codex_login::AuthManager;
@@ -50,6 +51,7 @@ pub(crate) struct ConfigManager {
     strict_config: bool,
     cloud_config_bundle: Arc<RwLock<CloudConfigBundleLoader>>,
     arg0_paths: Arg0DispatchPaths,
+    mcp_launch_cwds: Arc<McpLaunchCwds>,
     thread_config_loader: Arc<dyn ThreadConfigLoader>,
     network_policy: codex_http_client::NetworkPolicyController,
     local_network_policy: codex_http_client::NetworkPolicyController,
@@ -110,6 +112,7 @@ impl ConfigManager {
             strict_config,
             cloud_config_bundle: Arc::new(RwLock::new(cloud_config_bundle)),
             arg0_paths,
+            mcp_launch_cwds: Arc::default(),
             thread_config_loader,
             network_policy,
             local_network_policy: Default::default(),
@@ -117,6 +120,11 @@ impl ConfigManager {
             network_policy_snapshot: Arc::default(),
             mcp_ema_cancellation: Arc::default(),
         }
+    }
+
+    pub(crate) fn with_mcp_launch_cwds(mut self, cwds: McpLaunchCwds) -> Self {
+        self.mcp_launch_cwds = Arc::new(cwds);
+        self
     }
 
     pub(crate) fn codex_home(&self) -> &Path {
@@ -285,7 +293,7 @@ impl ConfigManager {
         self.check_application_policy_load(&policy_load)?;
         self.apply_network_policy(&mut config);
         self.apply_runtime_feature_enablement(&mut config)?;
-        self.apply_arg0_paths(&mut config);
+        self.apply_process_settings(&mut config);
         config.config_layer_stack = config
             .config_layer_stack
             .with_mcp_ema_cancellation(mcp_ema_cancellation);
@@ -311,7 +319,7 @@ impl ConfigManager {
         .await?;
         self.apply_network_policy(&mut config);
         self.apply_runtime_feature_enablement(&mut config)?;
-        self.apply_arg0_paths(&mut config);
+        self.apply_process_settings(&mut config);
         config.config_layer_stack = config
             .config_layer_stack
             .with_mcp_ema_cancellation(mcp_ema_cancellation);
@@ -340,7 +348,7 @@ impl ConfigManager {
         .await?;
         self.apply_network_policy(&mut config);
         self.apply_runtime_feature_enablement(&mut config)?;
-        self.apply_arg0_paths(&mut config);
+        self.apply_process_settings(&mut config);
         config.config_layer_stack = config
             .config_layer_stack
             .with_mcp_ema_cancellation(mcp_ema_cancellation);
@@ -491,7 +499,7 @@ impl ConfigManager {
             .await?;
         self.apply_network_policy(&mut config);
         self.apply_runtime_feature_enablement(&mut config)?;
-        self.apply_arg0_paths(&mut config);
+        self.apply_process_settings(&mut config);
         config.config_layer_stack = config
             .config_layer_stack
             .with_mcp_ema_cancellation(mcp_ema_cancellation);
@@ -712,7 +720,7 @@ impl ConfigManager {
         self.check_application_policy_load(&policy_load)?;
         self.apply_network_policy(&mut config);
         self.apply_runtime_feature_enablement(&mut config)?;
-        self.apply_arg0_paths(&mut config);
+        self.apply_process_settings(&mut config);
         config.config_layer_stack = config
             .config_layer_stack
             .with_mcp_ema_cancellation(mcp_ema_cancellation);
@@ -785,9 +793,10 @@ impl ConfigManager {
         );
     }
 
-    fn apply_arg0_paths(&self, config: &mut Config) {
+    fn apply_process_settings(&self, config: &mut Config) {
         config.codex_self_exe = self.arg0_paths.codex_self_exe.clone();
         config.codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();
+        config.mcp_launch_cwds = Arc::clone(&self.mcp_launch_cwds);
     }
 
     #[cfg(test)]

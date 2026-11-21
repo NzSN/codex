@@ -12,7 +12,7 @@ impl ChatWidget {
             .active_cell
             .as_ref()
             .map_or_else(Vec::new, |cell| cell.activity_ids());
-        if self.external_writer_view {
+        if self.is_external_writer_view() {
             return ids;
         }
         for active in self.transcript.active_tools.items() {
